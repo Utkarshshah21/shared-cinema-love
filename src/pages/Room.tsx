@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -7,11 +6,13 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, VideoIcon, ScreenShareIcon, MessageCircle, MicIcon, MicOffIcon, VideoOffIcon, ScreenShareOffIcon } from 'lucide-react';
+import { ArrowLeft, VideoIcon, ScreenShareIcon, MessageCircle, MicIcon, MicOffIcon, VideoOffIcon, ScreenShareOffIcon, Copy, QrCode, ShareIcon } from 'lucide-react';
 import ChatBox from '@/components/ChatBox';
 import ShareButton from '@/components/ShareButton';
 import { useWebRTC } from '@/hooks/useWebRTC';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { QRCodeSVG } from 'qrcode.react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
 const Room = () => {
   const { roomId } = useParams();
@@ -19,6 +20,7 @@ const Room = () => {
   const { toast } = useToast();
   const [message, setMessage] = useState('');
   const [chatMessages, setChatMessages] = useState<{text: string, isSelf: boolean}[]>([]);
+  const [showQrCode, setShowQrCode] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -36,12 +38,15 @@ const Room = () => {
     toggleScreenShare
   } = useWebRTC(roomId || '');
   
-  // Copy room code to clipboard
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomId || '');
+  // Generate the full URL for the room
+  const roomUrl = window.location.origin + '/room/' + roomId;
+
+  // Copy room link to clipboard
+  const copyRoomLink = () => {
+    navigator.clipboard.writeText(roomUrl);
     toast({
-      title: "Room code copied!",
-      description: "Share this code with a friend to connect",
+      title: "Room link copied!",
+      description: "Share this link with a friend to connect",
     });
   };
 
@@ -90,20 +95,42 @@ const Room = () => {
           <div className="bg-purple-100 rounded-lg px-4 py-2 flex items-center mr-4">
             <span className="mr-2 text-purple-800 font-medium">Room:</span> 
             <span className="font-bold text-purple-900">{roomId}</span>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={copyRoomCode} 
-              className="ml-2 text-purple-700 hover:text-purple-900"
-            >
-              Copy
-            </Button>
           </div>
+          
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline" className="flex items-center mr-2" onClick={() => setShowQrCode(true)}>
+                <QrCode size={16} className="mr-2" /> QR Code
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Room QR Code</DialogTitle>
+                <DialogDescription>
+                  Scan this QR code to join the room directly
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col items-center justify-center p-4">
+                <QRCodeSVG value={roomUrl} size={256} />
+                <p className="mt-4 text-sm text-center text-muted-foreground break-all">
+                  {roomUrl}
+                </p>
+                <Button className="mt-4 w-full" onClick={copyRoomLink}>
+                  <Copy size={16} className="mr-2" /> Copy Link
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+          
+          <Button variant="outline" className="flex items-center mr-2" onClick={copyRoomLink}>
+            <Copy size={16} className="mr-2" /> Copy Link
+          </Button>
           
           <ShareButton />
         </div>
       </div>
       
+      {/* Rest of the Room component remains the same */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <div className="flex justify-between items-center mb-4">

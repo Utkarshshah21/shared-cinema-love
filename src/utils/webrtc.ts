@@ -1,3 +1,4 @@
+
 // A simple implementation of WebRTC peer connection
 import { toast } from "@/components/ui/use-toast";
 
@@ -258,5 +259,10 @@ export class SignalingService {
       window.clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+  }
+
+  // Generate shareable room URL
+  getShareableLink() {
+    return window.location.origin + '/room/' + this.roomId;
   }
 }

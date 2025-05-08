@@ -45,7 +45,7 @@ const Index = () => {
           <CardHeader>
             <CardTitle className="text-2xl font-bold text-center text-purple-700">Create Session</CardTitle>
             <CardDescription className="text-center">
-              Start a new movie night with your partner
+              Start a new movie night with friends
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
@@ -62,7 +62,7 @@ const Index = () => {
           <CardHeader>
             <CardTitle className="text-2xl font-bold text-center text-purple-700">Join Session</CardTitle>
             <CardDescription className="text-center">
-              Enter your partner's room code
+              Enter your friend's room code
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -88,8 +88,8 @@ const Index = () => {
       </div>
       
       <footer className="mt-12 text-center text-sm text-muted-foreground">
-        <p>Shared Cinema Love &copy; {new Date().getFullYear()}</p>
-        <p className="mt-1">Connect with your loved one from anywhere in the world</p>
+        <p>Shared Cinema &copy; {new Date().getFullYear()}</p>
+        <p className="mt-1">Watch together from anywhere in the world</p>
       </footer>
     </div>
   );

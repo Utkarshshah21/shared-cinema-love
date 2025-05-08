@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -6,7 +7,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, VideoIcon, ScreenShareIcon, MessageCircle, MicIcon, MicOffIcon, VideoOffIcon, ScreenShareOffIcon, Copy, QrCode, ShareIcon } from 'lucide-react';
+import { ArrowLeft, VideoIcon, ScreenShareIcon, MessageCircle, MicIcon, MicOffIcon, VideoOffIcon, ScreenShareOffIcon, Copy, QrCode, ShareIcon, UserCheck } from 'lucide-react';
 import ChatBox from '@/components/ChatBox';
 import ShareButton from '@/components/ShareButton';
 import { useWebRTC } from '@/hooks/useWebRTC';
@@ -33,6 +34,7 @@ const Room = () => {
     isMicOn,
     isScreenSharing,
     isConnected,
+    hasRemoteUser,
     toggleCamera,
     toggleMic,
     toggleScreenShare
@@ -130,7 +132,6 @@ const Room = () => {
         </div>
       </div>
       
-      {/* Rest of the Room component remains the same */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <div className="flex justify-between items-center mb-4">
@@ -139,13 +140,13 @@ const Room = () => {
                 <AvatarFallback>ME</AvatarFallback>
               </Avatar>
               <span className="font-medium">You</span>
-              {remoteStream && remoteStream.getTracks().length > 0 && (
+              {hasRemoteUser && (
                 <>
                   <Separator orientation="vertical" className="h-4 mx-3" />
-                  <Avatar className="h-8 w-8 mr-2 bg-purple-200">
-                    <AvatarFallback>👤</AvatarFallback>
+                  <Avatar className="h-8 w-8 mr-2 bg-green-200">
+                    <AvatarFallback><UserCheck size={16} /></AvatarFallback>
                   </Avatar>
-                  <span className="font-medium">Remote User</span>
+                  <span className="font-medium text-green-600">Remote User</span>
                 </>
               )}
             </div>
@@ -236,27 +237,37 @@ const Room = () => {
                 {/* Remote video */}
                 <Card className="aspect-video relative overflow-hidden border-primary/20 bg-white/90 backdrop-blur-sm">
                   <div className="absolute inset-0 flex items-center justify-center">
-                    {(!remoteStream || remoteStream.getTracks().length === 0) && (
+                    {!hasRemoteUser ? (
                       <div className="text-center">
                         <VideoOffIcon size={48} className="text-muted-foreground mx-auto mb-4" />
                         <p className="text-lg font-medium text-purple-700">
                           Waiting for remote user...
                         </p>
                         <p className="text-sm text-muted-foreground mt-2">
-                          Share your room code with a friend to connect
+                          Share your room link with a friend to connect
                         </p>
                       </div>
-                    )}
+                    ) : remoteStream && remoteStream.getVideoTracks().length === 0 ? (
+                      <div className="text-center">
+                        <VideoOffIcon size={48} className="text-muted-foreground mx-auto mb-4" />
+                        <p className="text-lg font-medium text-green-600">
+                          User connected!
+                        </p>
+                        <p className="text-sm text-muted-foreground mt-2">
+                          Their camera is currently off
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                   
                   <video
                     ref={remoteVideoRef}
                     autoPlay
                     playsInline
-                    className={`${(remoteStream && remoteStream.getTracks().length > 0) ? "object-cover w-full h-full" : "hidden"}`}
+                    className={`${(hasRemoteUser && remoteStream && remoteStream.getVideoTracks().length > 0) ? "object-cover w-full h-full" : "hidden"}`}
                   ></video>
                   
-                  {remoteStream && remoteStream.getTracks().length > 0 && (
+                  {hasRemoteUser && (
                     <div className="absolute bottom-2 left-2 text-white bg-black/50 px-2 py-1 text-xs rounded">
                       Remote User
                     </div>
@@ -301,7 +312,7 @@ const Room = () => {
                 <MessageCircle size={20} className="text-purple-500 mr-2" />
                 <h3 className="font-medium text-lg">Chat</h3>
               </div>
-              <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`}></div>
+              <div className={`w-3 h-3 rounded-full ${hasRemoteUser ? 'bg-green-500' : 'bg-amber-500'}`}></div>
             </div>
             
             <ChatBox messages={chatMessages} />

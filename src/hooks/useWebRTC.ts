@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef } from 'react';
 import { WebRTCConnection, SignalingService, SignalingData } from '@/utils/webrtc';
 import { useToast } from '@/components/ui/use-toast';
@@ -11,6 +12,7 @@ export function useWebRTC(roomId: string) {
   const [isMicOn, setIsMicOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [hasRemoteUser, setHasRemoteUser] = useState(false);
   
   // Generate a random user ID for this session
   const userId = useRef(uuidv4()).current;
@@ -41,6 +43,9 @@ export function useWebRTC(roomId: string) {
             webrtcConnection.current.handleIceCandidate(data.candidate);
           }
           break;
+        case 'presence':
+          webrtcConnection.current.handlePresence(data.sender);
+          break;
         default:
           console.log('Unknown signaling message type:', data.type);
       }
@@ -51,7 +56,7 @@ export function useWebRTC(roomId: string) {
 
   // Initialize WebRTC and signaling
   useEffect(() => {
-    // Create a unique user ID for this session
+    // Create a unique user ID for this session if not already set
     const sendSignalingMessage = (data: SignalingData) => {
       signalingService.current?.send(data);
     };
@@ -75,10 +80,10 @@ export function useWebRTC(roomId: string) {
       webrtcConnection.current?.createOffer();
       setIsConnected(true);
       toast({
-        title: "Connected!",
+        title: "Connected to room",
         description: "You've successfully connected to room " + roomId,
       });
-    }, 2000);
+    }, 1000);
 
     return () => {
       clearTimeout(connectTimer);
@@ -87,23 +92,34 @@ export function useWebRTC(roomId: string) {
     };
   }, [roomId, userId, toast]);
 
-  // Set up the remote stream
+  // Set up the remote stream and check connection status
   useEffect(() => {
     if (!webrtcConnection.current) return;
     
     const remoteMediaStream = webrtcConnection.current.getRemoteStream();
     setRemoteStream(remoteMediaStream);
 
-    // Check for tracks every second (in case they're added later)
-    const trackCheckInterval = setInterval(() => {
-      if (remoteMediaStream.getTracks().length > 0) {
-        setRemoteStream(null); // Force a re-render
-        setRemoteStream(remoteMediaStream);
+    // Check for tracks and connection status every second
+    const statusCheckInterval = setInterval(() => {
+      if (webrtcConnection.current) {
+        // Check if we have remote tracks
+        const hasRemoteUser = webrtcConnection.current.hasRemoteUserConnected();
+        setHasRemoteUser(hasRemoteUser);
+        
+        // Update connection state
+        const connectionState = webrtcConnection.current.getConnectionState();
+        setIsConnected(connectionState === 'connected' || connectionState === 'completed');
+        
+        // Force a re-render of the remote stream if tracks are added
+        if (hasRemoteUser && remoteMediaStream.getTracks().length > 0) {
+          setRemoteStream(null);
+          setTimeout(() => setRemoteStream(remoteMediaStream), 10);
+        }
       }
     }, 1000);
 
     return () => {
-      clearInterval(trackCheckInterval);
+      clearInterval(statusCheckInterval);
     };
   }, [isConnected]);
 
@@ -309,6 +325,7 @@ export function useWebRTC(roomId: string) {
     isMicOn,
     isScreenSharing,
     isConnected,
+    hasRemoteUser,
     toggleCamera,
     toggleMic,
     toggleScreenShare

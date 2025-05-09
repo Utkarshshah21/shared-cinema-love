@@ -1,5 +1,5 @@
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '@/components/ui/use-toast';
 import { WebRTCConnection, SignalingService } from '@/utils/webrtc';
@@ -13,8 +13,18 @@ import { UseWebRTCReturn } from './types';
 export function useWebRTC(roomId: string, displayName: string = "User"): UseWebRTCReturn {
   const { toast } = useToast();
   
-  // Generate a random user ID for this session
-  const userId = useRef(uuidv4()).current;
+  // Generate a random user ID for this session that persists across refreshes
+  const userId = useRef<string>(() => {
+    // Try to get existing userId from sessionStorage
+    const existingId = sessionStorage.getItem(`webrtc_user_id_${roomId}`);
+    if (existingId) return existingId;
+    
+    // Create new ID if none exists
+    const newId = uuidv4();
+    sessionStorage.setItem(`webrtc_user_id_${roomId}`, newId);
+    return newId;
+  }).current;
+  
   const userDisplayName = useRef(displayName || "User " + userId.slice(0, 4)).current;
   
   // References for WebRTC connection and streams
@@ -25,10 +35,34 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   // Clear room data on first visit (helps avoid stale signaling data)
   useEffect(() => {
     if (typeof SignalingService !== 'undefined') {
-      // Clear old signaling data for this room
-      SignalingService.clearRoomData(roomId);
+      // Clear room data, but only partially to allow reconnections
+      SignalingService.cleanupOldRoomData(roomId);
     }
-  }, [roomId]);
+    
+    // Send a beacon when the page unloads to notify others
+    const handleBeforeUnload = () => {
+      if (signalingService.current) {
+        // Use sendBeacon for more reliable "I'm leaving" messages
+        const leaveData = JSON.stringify({
+          type: "participant-left",
+          sender: userId,
+          timestamp: Date.now()
+        });
+        
+        try {
+          navigator.sendBeacon(`/api/webrtc-signal?room=${roomId}&event=leave&userId=${userId}`, leaveData);
+        } catch (e) {
+          console.error("Failed to send leave beacon", e);
+        }
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [roomId, userId]);
   
   // Participant tracking
   const { remoteParticipants, updateRemoteParticipantsList, removeParticipant } = useParticipantTracking();
@@ -39,6 +73,21 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   
   // Remote stream
   const remoteStream = useRemoteStream(webrtcConnection);
+
+  // Monitor connection state for debugging
+  const [connectionStateLog, setConnectionStateLog] = useState<string[]>([]);
+  
+  // Log connection state changes
+  useEffect(() => {
+    if (webrtcConnection.current) {
+      const logState = (state: string) => {
+        console.log(`WebRTC connection state: ${state}`);
+        setConnectionStateLog(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${state}`]);
+      };
+      
+      webrtcConnection.current.onConnectionStateChange(logState);
+    }
+  }, []);
 
   // Signaling handler
   const { handleSignalingMessage } = useSignalingHandler(
@@ -63,41 +112,68 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     );
   
   // Initialize WebRTC and signaling on first render
-  if (!webrtcConnection.current) {
-    // Set up signaling callback
-    const sendSignalingMessage = (data: any) => {
-      signalingService.current?.send(data);
-    };
+  useEffect(() => {
+    if (!webrtcConnection.current) {
+      // Set up signaling callback
+      const sendSignalingMessage = (data: any) => {
+        signalingService.current?.send(data);
+      };
 
-    // Create WebRTC connection
-    webrtcConnection.current = new WebRTCConnection(
-      userId,
-      roomId,
-      userDisplayName,
-      sendSignalingMessage
-    );
-    
-    // Create signaling service
-    signalingService.current = new SignalingService(
-      roomId,
-      userId,
-      userDisplayName,
-      handleSignalingMessage
-    );
-    
-    // Log connection info for debugging
-    console.log(`WebRTC initialized - Room: ${roomId}, User: ${userId}, Name: ${userDisplayName}`);
-    
-    // Ensure clean disconnection when navigating away
-    window.addEventListener('beforeunload', () => {
-      if (signalingService.current) {
-        signalingService.current.stop();
-      }
-      if (webrtcConnection.current) {
-        webrtcConnection.current.close();
-      }
-    });
-  }
+      // Create WebRTC connection
+      webrtcConnection.current = new WebRTCConnection(
+        userId,
+        roomId,
+        userDisplayName,
+        sendSignalingMessage
+      );
+      
+      // Create signaling service
+      signalingService.current = new SignalingService(
+        roomId,
+        userId,
+        userDisplayName,
+        handleSignalingMessage
+      );
+      
+      // Log connection info for debugging
+      console.log(`WebRTC initialized - Room: ${roomId}, User: ${userId}, Name: ${userDisplayName}`);
+      
+      // Ensure clean disconnection when navigating away
+      const cleanupHandler = () => {
+        if (signalingService.current) {
+          signalingService.current.stop();
+        }
+        if (webrtcConnection.current) {
+          webrtcConnection.current.close();
+        }
+      };
+      
+      window.addEventListener('beforeunload', cleanupHandler);
+      
+      // Force a regular refresh of STUN/TURN servers
+      const refreshIceServersInterval = setInterval(() => {
+        if (webrtcConnection.current && webrtcConnection.current.refreshIceServers) {
+          webrtcConnection.current.refreshIceServers();
+        }
+      }, 30000); // every 30 seconds
+      
+      return () => {
+        window.removeEventListener('beforeunload', cleanupHandler);
+        clearInterval(refreshIceServersInterval);
+        cleanupHandler();
+      };
+    }
+  }, [roomId, userId, userDisplayName, handleSignalingMessage]);
+  
+  // Debug information for connection troubleshooting
+  const debugInfo = {
+    userId,
+    roomId,
+    connectionState,
+    remoteParticipantsCount: remoteParticipants.length,
+    hasRemoteUser,
+    connectionStateLog
+  };
   
   return {
     localStream,
@@ -113,9 +189,10 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     userDisplayName,
     toggleCamera,
     toggleMic,
-    toggleScreenShare
+    toggleScreenShare,
+    debugInfo
   };
 }
 
 // Re-export types
-export * from './types';
+export type { RemoteParticipant, UseWebRTCReturn } from './types';

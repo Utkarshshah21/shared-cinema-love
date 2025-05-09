@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -35,8 +34,17 @@ const Room = () => {
   const [message, setMessage] = useState('');
   const [chatMessages, setChatMessages] = useState<{text: string, isSelf: boolean}[]>([]);
   const [showQrCode, setShowQrCode] = useState(false);
-  const [userName, setUserName] = useState(`User ${Math.floor(Math.random() * 1000)}`);
+  const [userName, setUserName] = useState(() => {
+    // Try to get saved username from session storage
+    const savedName = sessionStorage.getItem('webrtc_user_name');
+    if (savedName) return savedName;
+    // Otherwise create a random name
+    const randomName = `User ${Math.floor(Math.random() * 1000)}`;
+    sessionStorage.setItem('webrtc_user_name', randomName);
+    return randomName;
+  });
   const [showUserList, setShowUserList] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'failed'>('connecting');
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -56,7 +64,8 @@ const Room = () => {
     userDisplayName,
     toggleCamera,
     toggleMic,
-    toggleScreenShare
+    toggleScreenShare,
+    debugInfo
   } = useWebRTC(roomId || '', userName);
   
   // Generate the full URL for the room
@@ -110,6 +119,31 @@ const Room = () => {
       console.log("Remote participants updated:", remoteParticipants);
     }
   }, [remoteParticipants]);
+  
+  // Update connection status based on state
+  useEffect(() => {
+    if (connectionState === 'connected' || connectionState === 'completed') {
+      setConnectionStatus('connected');
+    } else if (connectionState === 'connecting' || connectionState === 'new') {
+      setConnectionStatus('connecting');
+    } else if (connectionState === 'disconnected') {
+      setConnectionStatus('reconnecting');
+    } else {
+      setConnectionStatus('failed');
+    }
+  }, [connectionState]);
+  
+  // This function will be triggered when the user clicks the "Join now" button
+  const joinRoom = () => {
+    // Already joined, do nothing
+    toast({
+      title: "Joined room",
+      description: `You've successfully joined room: ${roomId}`,
+    });
+    
+    // Save username to session storage
+    sessionStorage.setItem('webrtc_user_name', userName);
+  };
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -163,7 +197,7 @@ const Room = () => {
                 <Users size={16} className="mr-2" /> Participants ({remoteParticipants.length + 1})
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>Room Participants</DialogTitle>
                 <DialogDescription>
@@ -180,6 +214,7 @@ const Room = () => {
                       <TableHead>Mic</TableHead>
                       <TableHead>Sharing</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Connection</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -231,6 +266,9 @@ const Room = () => {
                           <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span> Active
                         </span>
                       </TableCell>
+                      <TableCell>
+                        <Badge>{connectionState}</Badge>
+                      </TableCell>
                     </TableRow>
 
                     {/* Remote participants */}
@@ -280,19 +318,42 @@ const Room = () => {
                             <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span> Connected
                           </span>
                         </TableCell>
+                        <TableCell>
+                          <Badge>{participant.connectionState}</Badge>
+                        </TableCell>
                       </TableRow>
                     ))}
                     
                     {/* Show message if no remote users */}
                     {remoteParticipants.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-gray-500 py-4">
+                        <TableCell colSpan={6} className="text-center text-gray-500 py-4">
                           No other participants yet. Share the room link to invite someone.
                         </TableCell>
                       </TableRow>
                     )}
                   </TableBody>
                 </Table>
+                
+                {/* Debug info */}
+                {debugInfo && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-md text-xs">
+                    <p className="font-semibold mb-1">Debug Info:</p>
+                    <p>User ID: {debugInfo.userId}</p>
+                    <p>Room ID: {debugInfo.roomId}</p>
+                    <p>Connection State: {debugInfo.connectionState}</p>
+                    <p>Remote Participants: {debugInfo.remoteParticipantsCount}</p>
+                    <p>Has Remote User: {debugInfo.hasRemoteUser ? 'Yes' : 'No'}</p>
+                    <div className="mt-2">
+                      <p className="font-semibold">Connection Log:</p>
+                      <div className="max-h-20 overflow-y-auto">
+                        {debugInfo.connectionStateLog.map((log, i) => (
+                          <p key={i}>{log}</p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </DialogContent>
           </Dialog>
@@ -322,16 +383,24 @@ const Room = () => {
             </div>
             
             <div className="text-sm text-muted-foreground">
-              {isConnected ? 
+              {connectionStatus === 'connected' ? 
                 <span className="text-green-500 font-medium flex items-center">
                   <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span> Connected
                 </span> : 
+                connectionStatus === 'connecting' ?
                 <span className="text-amber-500 font-medium flex items-center">
                   <span className="w-2 h-2 bg-amber-500 rounded-full mr-1"></span> Connecting...
+                </span> :
+                connectionStatus === 'reconnecting' ?
+                <span className="text-amber-500 font-medium flex items-center">
+                  <span className="w-2 h-2 bg-amber-500 rounded-full mr-1"></span> Reconnecting...
+                </span> :
+                <span className="text-red-500 font-medium flex items-center">
+                  <span className="w-2 h-2 bg-red-500 rounded-full mr-1"></span> Connection Failed
                 </span>
               }
               <span className="ml-2 text-xs text-gray-400">{connectionState}</span>
-              {hasRemoteUser && (
+              {hasRemoteUser && remoteParticipants.length > 0 && (
                 <span className="ml-2 text-green-500 font-medium flex items-center">
                   <User size={14} className="mr-1" /> {remoteParticipants.length} remote
                 </span>
@@ -390,6 +459,14 @@ const Room = () => {
                 className={isScreenSharing ? "bg-purple-500 hover:bg-purple-600" : ""}
               >
                 {isScreenSharing ? <ScreenShareIcon size={18} /> : <ScreenShareOffIcon size={18} />}
+              </Button>
+              
+              <Button 
+                variant="default"
+                onClick={joinRoom}
+                className="bg-green-500 hover:bg-green-600"
+              >
+                Join Now
               </Button>
             </div>
             
@@ -524,6 +601,22 @@ const Room = () => {
               </Card>
             </TabsContent>
           </Tabs>
+          
+          {/* Connection guidance for failed connections */}
+          {connectionStatus === 'failed' && (
+            <Card className="p-4 bg-red-50 border-red-200 mb-6">
+              <h3 className="text-red-700 font-semibold flex items-center mb-2">
+                <span className="w-2 h-2 bg-red-500 rounded-full mr-1"></span> Connection Issues
+              </h3>
+              <p className="text-red-600 mb-2">We're having trouble establishing a connection. Try these steps:</p>
+              <ol className="list-decimal pl-5 text-red-600">
+                <li>Make sure your firewall or network isn't blocking WebRTC connections</li>
+                <li>Try using a different browser (Chrome or Firefox work best)</li>
+                <li>Refresh the page and try connecting again</li>
+                <li>Try using a mobile data connection instead of WiFi</li>
+              </ol>
+            </Card>
+          )}
         </div>
         
         <div className="lg:col-span-1">

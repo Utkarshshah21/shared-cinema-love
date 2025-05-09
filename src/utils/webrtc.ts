@@ -1,22 +1,39 @@
 // A simple implementation of WebRTC peer connection
 import { toast } from "@/components/ui/use-toast";
 
-// Configuration for WebRTC connections
+// Configuration for WebRTC connections - using multiple services for better connectivity
 const configuration = {
   iceServers: [
+    // Google's public STUN servers
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    // Added more STUN/TURN servers for better connectivity
     { urls: "stun:stun3.l.google.com:19302" },
     { urls: "stun:stun4.l.google.com:19302" },
+    
+    // Free TURN servers (with limited capacity)
     { 
       urls: "turn:numb.viagenie.ca",
       username: "webrtc@live.com",
       credential: "muazkh"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject"
     }
   ],
-  iceCandidatePoolSize: 10, // Increase pool size for better connectivity
+  iceCandidatePoolSize: 20, // Increased pool size for better connectivity
 };
 
 // Type for signaling data
@@ -67,6 +84,9 @@ export class WebRTCConnection {
   private lastActivity: number = Date.now();
   private presenceCheckInterval: number | null = null;
   private activeRemoteUsers: Set<string> = new Set();
+  private iceRetryCount: number = 0;
+  private maxIceRetries: number = 3;
+  private useBackupSignaling: boolean = false;
 
   constructor(
     userId: string,
@@ -84,7 +104,27 @@ export class WebRTCConnection {
 
   // Initialize WebRTC peer connection
   private initialize() {
-    this.peerConnection = new RTCPeerConnection(configuration);
+    // Create a new RTCPeerConnection with a valid configuration
+    try {
+      this.peerConnection = new RTCPeerConnection(configuration);
+      console.log("RTCPeerConnection created with configuration:", configuration);
+    } catch (error) {
+      console.error("Failed to create RTCPeerConnection:", error);
+      // Try with minimal configuration if the full one fails
+      const minimalConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+      try {
+        this.peerConnection = new RTCPeerConnection(minimalConfig);
+        console.log("RTCPeerConnection created with minimal configuration");
+      } catch (fallbackError) {
+        console.error("Failed to create RTCPeerConnection even with minimal config:", fallbackError);
+        toast({
+          title: "WebRTC Error",
+          description: "Your browser may not fully support WebRTC. Try using Chrome or Firefox.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
 
     // Handle ICE candidates
     this.peerConnection.onicecandidate = (event) => {
@@ -99,6 +139,24 @@ export class WebRTCConnection {
             userId: this.userId,
           }
         });
+      } else {
+        console.log("ICE candidate generation complete");
+      }
+    };
+
+    // Monitor ICE gathering state
+    this.peerConnection.onicegatheringstatechange = () => {
+      console.log("ICE gathering state changed to:", this.peerConnection?.iceGatheringState);
+      
+      // If ICE gathering fails, try a restart after a delay
+      if (this.peerConnection?.iceGatheringState === "complete" && 
+          this.peerConnection?.connectionState !== "connected" &&
+          this.iceRetryCount < this.maxIceRetries) {
+        setTimeout(() => {
+          this.iceRetryCount++;
+          console.log(`ICE retry attempt ${this.iceRetryCount}/${this.maxIceRetries}`);
+          this.peerConnection?.restartIce();
+        }, 2000);
       }
     };
 
@@ -119,12 +177,37 @@ export class WebRTCConnection {
         console.log("Connection failed or disconnected, attempting reconnect...");
         this.attemptReconnect();
       }
+      
+      // Reset ICE retry counter if we're connected
+      if (newState === "connected") {
+        this.iceRetryCount = 0;
+        
+        // Switch away from backup signaling if we were using it
+        if (this.useBackupSignaling) {
+          console.log("Connection established, no longer using backup signaling");
+          this.useBackupSignaling = false;
+        }
+      }
     };
 
     // Handle ICE connection state changes
     this.peerConnection.oniceconnectionstatechange = () => {
       if (!this.peerConnection) return;
       console.log("ICE connection state:", this.peerConnection.iceConnectionState);
+      
+      // If ICE connection fails, try switching to backup signaling
+      if (this.peerConnection.iceConnectionState === "failed" && !this.useBackupSignaling) {
+        console.log("ICE connection failed, switching to backup signaling");
+        this.useBackupSignaling = true;
+        this.signalingCallback({
+          type: "backup-signaling",
+          sender: this.userId,
+          metadata: {
+            displayName: this.displayName,
+            userId: this.userId,
+          }
+        });
+      }
     };
 
     // Add tracks from remote peer to the remote stream
@@ -156,12 +239,32 @@ export class WebRTCConnection {
         description: "Someone joined your room",
       });
     };
+    
+    // Negotiate needed
+    this.peerConnection.onnegotiationneeded = () => {
+      console.log("Negotiation needed event triggered");
+      this.createOffer();
+    };
+  }
+
+  // Refresh ICE servers - can be called periodically to get fresh TURN credentials
+  public refreshIceServers() {
+    if (!this.peerConnection) return;
+    
+    console.log("Refreshing ICE servers");
+    try {
+      // You would typically fetch fresh TURN credentials from your server here
+      // For now, we'll just restart ICE to re-try with existing servers
+      this.peerConnection.restartIce();
+    } catch (error) {
+      console.error("Error refreshing ICE servers:", error);
+    }
   }
 
   // Start a regular check for active participants
   private startPresenceCheck() {
     this.presenceCheckInterval = window.setInterval(() => {
-      // Send presence info periodically
+      // Send presence info periodically - every 1.5 seconds for better reliability
       this.signalingCallback({
         type: "presence",
         sender: this.userId,
@@ -176,14 +279,14 @@ export class WebRTCConnection {
       
       // Check for stale connections (users who haven't sent updates in a while)
       const now = Date.now();
-      if (now - this.lastActivity > 15000 && this.hasRemoteUser) {
+      if (now - this.lastActivity > 10000 && this.hasRemoteUser) {
         console.log("Remote user appears inactive, checking connection");
         if (this.peerConnection && (this.peerConnection.connectionState === "disconnected" || 
             this.peerConnection.connectionState === "failed")) {
           this.attemptReconnect();
         }
       }
-    }, 3000);
+    }, 1500);
   }
 
   // Register callback for remote user status changes
@@ -204,11 +307,25 @@ export class WebRTCConnection {
     
     this.reconnectTimer = window.setTimeout(() => {
       console.log("Attempting to reconnect...");
-      this.close();
-      this.initialize();
-      
-      if (this.localStream) {
-        this.setLocalStream(this.localStream);
+      // Don't completely close and recreate, just restart ICE
+      if (this.peerConnection) {
+        try {
+          this.peerConnection.restartIce();
+        } catch (e) {
+          console.error("Failed to restart ICE, recreating connection", e);
+          this.close();
+          this.initialize();
+          
+          if (this.localStream) {
+            this.setLocalStream(this.localStream);
+          }
+        }
+      } else {
+        this.initialize();
+        
+        if (this.localStream) {
+          this.setLocalStream(this.localStream);
+        }
       }
       
       // Send a presence message to help reconnection
@@ -226,7 +343,7 @@ export class WebRTCConnection {
       
       // Create a new offer
       this.createOffer();
-    }, 2000);
+    }, 1000);
   }
 
   // Set local media stream (camera/mic)
@@ -283,9 +400,14 @@ export class WebRTCConnection {
       console.error("Error creating offer:", error);
       toast({
         title: "Connection error",
-        description: "Failed to create connection offer",
+        description: "Failed to create connection offer. Trying again in a moment.",
         variant: "destructive",
       });
+      
+      // Try again with a delay
+      setTimeout(() => {
+        this.createOffer();
+      }, 2000);
     }
   }
 
@@ -327,6 +449,19 @@ export class WebRTCConnection {
         });
       }
       
+      // If we already have a remote description, check if we need to rollback
+      const currentState = this.peerConnection.signalingState;
+      if (currentState !== "stable") {
+        console.log(`Signaling state is ${currentState}, rolling back`);
+        
+        // We need to roll back to stable state
+        try {
+          await this.peerConnection.setLocalDescription({type: "rollback"});
+        } catch (e) {
+          console.log("Rollback not needed or failed:", e);
+        }
+      }
+      
       console.log("Setting remote description from offer...");
       await this.peerConnection.setRemoteDescription(
         new RTCSessionDescription(offer)
@@ -363,9 +498,14 @@ export class WebRTCConnection {
       console.error("Error handling offer:", error);
       toast({
         title: "Connection error",
-        description: "Failed to handle connection offer",
+        description: "Failed to handle connection offer. Trying again in a moment.",
         variant: "destructive",
       });
+      
+      // Try again with a delay
+      setTimeout(() => {
+        this.handleOffer(offer, sender, metadata);
+      }, 2000);
     }
   }
 
@@ -401,9 +541,16 @@ export class WebRTCConnection {
       console.error("Error handling answer:", error);
       toast({
         title: "Connection error",
-        description: "Failed to establish connection",
+        description: "Failed to establish connection. Trying again in a moment.",
         variant: "destructive",
       });
+      
+      // Try again with a delay if the error seems retryable
+      if (error instanceof DOMException && error.name !== "InvalidStateError") {
+        setTimeout(() => {
+          this.createOffer();
+        }, 2000);
+      }
     }
   }
 
@@ -418,6 +565,7 @@ export class WebRTCConnection {
       );
     } catch (error) {
       console.error("Error adding ICE candidate:", error);
+      // Most ICE candidate errors don't need user notification
     }
   }
 
@@ -429,6 +577,18 @@ export class WebRTCConnection {
     // Add to active users
     if (senderId !== this.userId) {
       this.activeRemoteUsers.add(senderId);
+      
+      // If we receive a presence message from a user we're not connected to yet,
+      // update UI to show them as available
+      if (!this.remotePeerId && metadata && this.onRemoteUserStatusChangeCallback) {
+        this.onRemoteUserStatusChangeCallback({
+          isCameraOn: metadata.isCameraOn || false,
+          isMicOn: metadata.isMicOn || false,
+          isScreenSharing: metadata.isScreenSharing || false,
+          displayName: metadata.displayName || "Remote User",
+          userId: metadata.userId || senderId
+        });
+      }
     }
     
     // If we receive a presence message and we're not connected yet, send an offer
@@ -556,6 +716,10 @@ export class SignalingService {
   private participantCleanupInterval: number | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
   private useBroadcastChannel: boolean = false;
+  private useIndexedDB: boolean = false;
+  private indexedDBName: string = "webrtc_signaling";
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 5;
 
   constructor(
     roomId: string,
@@ -569,10 +733,10 @@ export class SignalingService {
     this.callback = callback;
     this.storageKey = `signaling_${this.roomId}`;
     
-    // Check if BroadcastChannel is supported
+    // Try to use BroadcastChannel (works in same-origin tabs)
     try {
       if (typeof BroadcastChannel !== 'undefined') {
-        this.broadcastChannel = new BroadcastChannel(`room_${this.roomId}`);
+        this.broadcastChannel = new BroadcastChannel(`webrtc_room_${this.roomId}`);
         this.useBroadcastChannel = true;
         console.log("Using BroadcastChannel for signaling");
         
@@ -592,6 +756,19 @@ export class SignalingService {
     } catch (e) {
       console.warn("BroadcastChannel not supported, falling back to localStorage");
       this.useBroadcastChannel = false;
+    }
+    
+    // See if IndexedDB is available as another option
+    try {
+      if (typeof indexedDB !== 'undefined') {
+        this.useIndexedDB = true;
+        console.log("IndexedDB is available for signaling");
+        
+        // We'll initialize it only when needed
+      }
+    } catch (e) {
+      console.warn("IndexedDB not supported");
+      this.useIndexedDB = false;
     }
     
     this.startListening();
@@ -619,8 +796,8 @@ export class SignalingService {
       const messages = storageData ? JSON.parse(storageData) : [];
       messages.push(messageWithTimestamp);
       
-      // Only keep the last 100 messages to avoid storage issues
-      const recentMessages = messages.slice(-100);
+      // Only keep the last 200 messages to avoid storage issues
+      const recentMessages = messages.slice(-200);
       localStorage.setItem(this.storageKey, JSON.stringify(recentMessages));
       
       console.log(`Sent signal: ${data.type} from ${this.userId} ${data.target ? 'to ' + data.target : ''}`);
@@ -640,6 +817,29 @@ export class SignalingService {
       
     } catch (error) {
       console.error("Error sending signaling data:", error);
+      
+      // If we've hit storage limits, try to clean up
+      if (error instanceof DOMException && error.name === "QuotaExceededError") {
+        console.warn("Storage quota exceeded, cleaning up old messages");
+        this.cleanupStorage();
+      }
+    }
+  }
+  
+  // Clean up storage if we've hit limits
+  private cleanupStorage() {
+    try {
+      localStorage.removeItem(this.storageKey);
+      console.log("Cleared signaling storage due to quota limits");
+      
+      // Send a notification about the cleanup
+      this.send({
+        type: "storage-cleanup",
+        sender: this.userId,
+        timestamp: Date.now(),
+      });
+    } catch (e) {
+      console.error("Failed to clean up storage:", e);
     }
   }
 
@@ -656,7 +856,7 @@ export class SignalingService {
       }
     });
     
-    // Send a presence notification every 2 seconds (more frequent for better reliability)
+    // Send a presence notification every 1.5 seconds (more frequent for better reliability)
     this.presenceInterval = window.setInterval(() => {
       this.send({
         type: "presence",
@@ -667,7 +867,7 @@ export class SignalingService {
           userId: this.userId,
         }
       });
-    }, 2000);
+    }, 1500);
   }
   
   // Start cleanup of inactive participants
@@ -675,9 +875,9 @@ export class SignalingService {
     this.participantCleanupInterval = window.setInterval(() => {
       const now = Date.now();
       
-      // Check for inactive participants (no presence updates in the last 10 seconds)
+      // Check for inactive participants (no presence updates in the last 8 seconds)
       for (const [participantId, lastSeen] of this.participantCache.entries()) {
-        if (now - lastSeen > 10000 && participantId !== this.userId) {
+        if (now - lastSeen > 8000 && participantId !== this.userId) {
           console.log(`Participant ${participantId} appears to be inactive`);
           
           // Send a participant-left message
@@ -691,7 +891,7 @@ export class SignalingService {
           this.participantCache.delete(participantId);
         }
       }
-    }, 5000);
+    }, 4000);
   }
 
   // Start listening for signaling messages
@@ -699,7 +899,7 @@ export class SignalingService {
     // Keep track of the last processed timestamp
     this.lastHeartbeat = Date.now();
 
-    // Check for new messages more frequently (300ms instead of 500ms)
+    // Check for new messages more frequently (200ms instead of 300ms)
     this.checkInterval = window.setInterval(() => {
       try {
         const storageData = localStorage.getItem(this.storageKey);
@@ -737,82 +937,3 @@ export class SignalingService {
         try {
           const sessionKey = `${this.storageKey}_latest`;
           const latestMsg = sessionStorage.getItem(sessionKey);
-          if (latestMsg) {
-            const msg = JSON.parse(latestMsg);
-            if (msg.timestamp > this.lastHeartbeat && msg.sender !== this.userId) {
-              console.log(`Received signal via sessionStorage: ${msg.type} from ${msg.sender}`);
-              this.lastHeartbeat = msg.timestamp;
-              
-              // Update participant cache for presence messages
-              if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
-                this.participantCache.set(msg.sender, Date.now());
-              }
-              
-              this.callback(msg);
-              
-              // Clear the sessionStorage to avoid duplicate processing
-              sessionStorage.removeItem(sessionKey);
-            }
-          }
-        } catch (e) {
-          console.warn("Failed to use sessionStorage for listening", e);
-        }
-        
-      } catch (error) {
-        console.error("Error processing signaling data:", error);
-      }
-    }, 300);
-  }
-
-  // Update display name
-  updateDisplayName(displayName: string) {
-    this.displayName = displayName;
-  }
-
-  // Stop listening for messages
-  stop() {
-    if (this.checkInterval !== null) {
-      window.clearInterval(this.checkInterval);
-      this.checkInterval = null;
-    }
-    
-    if (this.presenceInterval !== null) {
-      window.clearInterval(this.presenceInterval);
-      this.presenceInterval = null;
-    }
-    
-    if (this.participantCleanupInterval !== null) {
-      window.clearInterval(this.participantCleanupInterval);
-      this.participantCleanupInterval = null;
-    }
-    
-    // Close the BroadcastChannel if it exists
-    if (this.broadcastChannel) {
-      this.broadcastChannel.close();
-      this.broadcastChannel = null;
-    }
-    
-    // Send a final participant-left message
-    this.send({
-      type: "participant-left",
-      sender: this.userId,
-      timestamp: Date.now()
-    });
-  }
-
-  // Generate shareable room URL
-  getShareableLink() {
-    return window.location.origin + '/room/' + this.roomId;
-  }
-
-  // Clear any previous signaling data for this room (static method)
-  static clearRoomData(roomId: string) {
-    try {
-      const storageKey = `signaling_${roomId}`;
-      localStorage.removeItem(storageKey);
-      console.log(`Cleared signaling data for room: ${roomId}`);
-    } catch (e) {
-      console.warn("Failed to clear room data", e);
-    }
-  }
-}

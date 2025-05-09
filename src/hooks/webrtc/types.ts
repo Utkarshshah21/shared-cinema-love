@@ -27,6 +27,14 @@ export interface UseWebRTCReturn {
   toggleCamera: () => Promise<void>;
   toggleMic: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
+  debugInfo?: {
+    userId: string;
+    roomId: string;
+    connectionState: string;
+    remoteParticipantsCount: number;
+    hasRemoteUser: boolean;
+    connectionStateLog: string[];
+  };
 }
 
 export interface WebRTCState {

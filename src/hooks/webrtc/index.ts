@@ -1,5 +1,5 @@
 
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '@/components/ui/use-toast';
 import { WebRTCConnection, SignalingService } from '@/utils/webrtc';
@@ -21,6 +21,14 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   const webrtcConnection = useRef<WebRTCConnection | null>(null);
   const signalingService = useRef<SignalingService | null>(null);
   const screenStream = useRef<MediaStream | null>(null);
+  
+  // Clear room data on first visit (helps avoid stale signaling data)
+  useEffect(() => {
+    if (typeof SignalingService !== 'undefined') {
+      // Clear old signaling data for this room
+      SignalingService.clearRoomData(roomId);
+    }
+  }, [roomId]);
   
   // Participant tracking
   const { remoteParticipants, updateRemoteParticipantsList, removeParticipant } = useParticipantTracking();
@@ -76,6 +84,19 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
       userDisplayName,
       handleSignalingMessage
     );
+    
+    // Log connection info for debugging
+    console.log(`WebRTC initialized - Room: ${roomId}, User: ${userId}, Name: ${userDisplayName}`);
+    
+    // Ensure clean disconnection when navigating away
+    window.addEventListener('beforeunload', () => {
+      if (signalingService.current) {
+        signalingService.current.stop();
+      }
+      if (webrtcConnection.current) {
+        webrtcConnection.current.close();
+      }
+    });
   }
   
   return {

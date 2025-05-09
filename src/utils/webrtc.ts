@@ -1,4 +1,3 @@
-
 // A simple implementation of WebRTC peer connection
 import { toast } from "@/components/ui/use-toast";
 
@@ -8,7 +7,16 @@ const configuration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    // Added more STUN/TURN servers for better connectivity
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
+    { 
+      urls: "turn:numb.viagenie.ca",
+      username: "webrtc@live.com",
+      credential: "muazkh"
+    }
   ],
+  iceCandidatePoolSize: 10, // Increase pool size for better connectivity
 };
 
 // Type for signaling data
@@ -534,8 +542,7 @@ export class WebRTCConnection {
   }
 }
 
-// Simple signaling server simulation using local storage for the demo
-// In a real app, this would be a WebSocket server or similar
+// Enhanced signaling server implementation
 export class SignalingService {
   private roomId: string;
   private userId: string;
@@ -547,6 +554,8 @@ export class SignalingService {
   private displayName: string;
   private participantCache: Map<string, number> = new Map(); // Store last activity time for each participant
   private participantCleanupInterval: number | null = null;
+  private broadcastChannel: BroadcastChannel | null = null;
+  private useBroadcastChannel: boolean = false;
 
   constructor(
     roomId: string,
@@ -559,6 +568,32 @@ export class SignalingService {
     this.displayName = displayName;
     this.callback = callback;
     this.storageKey = `signaling_${this.roomId}`;
+    
+    // Check if BroadcastChannel is supported
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        this.broadcastChannel = new BroadcastChannel(`room_${this.roomId}`);
+        this.useBroadcastChannel = true;
+        console.log("Using BroadcastChannel for signaling");
+        
+        this.broadcastChannel.onmessage = (event) => {
+          const msg = event.data;
+          if (msg.sender !== this.userId) {
+            console.log(`Received signal via BroadcastChannel: ${msg.type} from ${msg.sender}`);
+            this.callback(msg);
+            
+            // Update participant cache for presence messages
+            if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
+              this.participantCache.set(msg.sender, Date.now());
+            }
+          }
+        };
+      }
+    } catch (e) {
+      console.warn("BroadcastChannel not supported, falling back to localStorage");
+      this.useBroadcastChannel = false;
+    }
+    
     this.startListening();
     this.startPresenceHeartbeat();
     this.startParticipantCleanup();
@@ -567,9 +602,6 @@ export class SignalingService {
   // Send signaling data
   send(data: SignalingData) {
     try {
-      const storageData = localStorage.getItem(this.storageKey);
-      const messages = storageData ? JSON.parse(storageData) : [];
-      
       // Add timestamp to data for ordering and cleanup
       const messageWithTimestamp = {
         ...data,
@@ -577,6 +609,14 @@ export class SignalingService {
         displayName: this.displayName,
       };
       
+      // Try to use BroadcastChannel first (works across tabs)
+      if (this.useBroadcastChannel && this.broadcastChannel) {
+        this.broadcastChannel.postMessage(messageWithTimestamp);
+      }
+      
+      // Always use localStorage as fallback (works across browser refreshes)
+      const storageData = localStorage.getItem(this.storageKey);
+      const messages = storageData ? JSON.parse(storageData) : [];
       messages.push(messageWithTimestamp);
       
       // Only keep the last 100 messages to avoid storage issues
@@ -589,6 +629,15 @@ export class SignalingService {
       if (data.type === "presence" && data.sender) {
         this.participantCache.set(data.sender, Date.now());
       }
+      
+      // Use SessionStorage as an additional mechanism
+      try {
+        const sessionKey = `${this.storageKey}_latest`;
+        sessionStorage.setItem(sessionKey, JSON.stringify(messageWithTimestamp));
+      } catch (e) {
+        console.warn("Failed to use sessionStorage", e);
+      }
+      
     } catch (error) {
       console.error("Error sending signaling data:", error);
     }
@@ -607,7 +656,7 @@ export class SignalingService {
       }
     });
     
-    // Send a presence notification every 3 seconds
+    // Send a presence notification every 2 seconds (more frequent for better reliability)
     this.presenceInterval = window.setInterval(() => {
       this.send({
         type: "presence",
@@ -618,7 +667,7 @@ export class SignalingService {
           userId: this.userId,
         }
       });
-    }, 3000);
+    }, 2000);
   }
   
   // Start cleanup of inactive participants
@@ -650,7 +699,7 @@ export class SignalingService {
     // Keep track of the last processed timestamp
     this.lastHeartbeat = Date.now();
 
-    // Check for new messages every 500ms
+    // Check for new messages more frequently (300ms instead of 500ms)
     this.checkInterval = window.setInterval(() => {
       try {
         const storageData = localStorage.getItem(this.storageKey);
@@ -663,7 +712,7 @@ export class SignalingService {
           (msg: any) => 
             msg.timestamp > this.lastHeartbeat && 
             msg.sender !== this.userId &&
-            (!msg.target || msg.target === this.userId)
+            (!msg.target || msg.target === this.userId || msg.target === 'broadcast')
         );
         
         if (newMessages.length > 0) {
@@ -673,7 +722,7 @@ export class SignalingService {
           
           // Forward new messages to the callback
           newMessages.forEach((msg: SignalingData) => {
-            console.log(`Received signal: ${msg.type} from ${msg.sender}`);
+            console.log(`Received signal via localStorage: ${msg.type} from ${msg.sender}`);
             
             // Update participant cache for presence messages
             if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
@@ -683,10 +732,36 @@ export class SignalingService {
             this.callback(msg);
           });
         }
+        
+        // Also check sessionStorage for any missed messages
+        try {
+          const sessionKey = `${this.storageKey}_latest`;
+          const latestMsg = sessionStorage.getItem(sessionKey);
+          if (latestMsg) {
+            const msg = JSON.parse(latestMsg);
+            if (msg.timestamp > this.lastHeartbeat && msg.sender !== this.userId) {
+              console.log(`Received signal via sessionStorage: ${msg.type} from ${msg.sender}`);
+              this.lastHeartbeat = msg.timestamp;
+              
+              // Update participant cache for presence messages
+              if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
+                this.participantCache.set(msg.sender, Date.now());
+              }
+              
+              this.callback(msg);
+              
+              // Clear the sessionStorage to avoid duplicate processing
+              sessionStorage.removeItem(sessionKey);
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to use sessionStorage for listening", e);
+        }
+        
       } catch (error) {
         console.error("Error processing signaling data:", error);
       }
-    }, 500);
+    }, 300);
   }
 
   // Update display name
@@ -711,6 +786,12 @@ export class SignalingService {
       this.participantCleanupInterval = null;
     }
     
+    // Close the BroadcastChannel if it exists
+    if (this.broadcastChannel) {
+      this.broadcastChannel.close();
+      this.broadcastChannel = null;
+    }
+    
     // Send a final participant-left message
     this.send({
       type: "participant-left",
@@ -722,5 +803,16 @@ export class SignalingService {
   // Generate shareable room URL
   getShareableLink() {
     return window.location.origin + '/room/' + this.roomId;
+  }
+
+  // Clear any previous signaling data for this room (static method)
+  static clearRoomData(roomId: string) {
+    try {
+      const storageKey = `signaling_${roomId}`;
+      localStorage.removeItem(storageKey);
+      console.log(`Cleared signaling data for room: ${roomId}`);
+    } catch (e) {
+      console.warn("Failed to clear room data", e);
+    }
   }
 }

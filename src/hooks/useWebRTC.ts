@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from 'react';
 import { WebRTCConnection, SignalingService, SignalingData, Participant } from '@/utils/webrtc';
 import { useToast } from '@/components/ui/use-toast';
@@ -11,6 +10,7 @@ export interface RemoteParticipant {
   isMicOn: boolean;
   isScreenSharing: boolean;
   connectionState: string;
+  joinedAt: number;
 }
 
 export function useWebRTC(roomId: string, displayName: string = "User") {
@@ -24,6 +24,7 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
   const [hasRemoteUser, setHasRemoteUser] = useState(false);
   const [remoteParticipant, setRemoteParticipant] = useState<RemoteParticipant | null>(null);
   const [connectionState, setConnectionState] = useState<string>("new");
+  const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipant[]>([]);
   
   // Generate a random user ID for this session
   const userId = useRef(uuidv4()).current;
@@ -60,9 +61,21 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
           break;
         case 'presence':
           webrtcConnection.current.handlePresence(data.sender, data.metadata);
+          // Also update participants list from presence messages
+          if (data.metadata && data.sender !== userId) {
+            updateRemoteParticipantsList(data.sender, data.metadata);
+          }
           break;
         case 'status-update':
           webrtcConnection.current.handleStatusUpdate(data.sender, data.metadata);
+          if (data.metadata && data.sender !== userId) {
+            updateRemoteParticipantsList(data.sender, data.metadata);
+          }
+          break;
+        case 'participant-left':
+          if (data.sender !== userId) {
+            removeParticipant(data.sender);
+          }
           break;
         default:
           console.log('Unknown signaling message type:', data.type);
@@ -70,6 +83,55 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
     } catch (error) {
       console.error('Error handling signaling message:', error);
     }
+  };
+
+  // Update remote participants list from signaling data
+  const updateRemoteParticipantsList = (senderId: string, metadata: any) => {
+    setRemoteParticipants(prev => {
+      // Check if this participant already exists
+      const existingIndex = prev.findIndex(p => p.userId === senderId);
+      
+      const updatedParticipant = {
+        userId: senderId,
+        displayName: metadata.displayName || "User " + senderId.slice(0, 4),
+        isCameraOn: metadata.isCameraOn || false,
+        isMicOn: metadata.isMicOn || false, 
+        isScreenSharing: metadata.isScreenSharing || false,
+        connectionState: connectionState,
+        joinedAt: Date.now()
+      };
+
+      // If participant exists, update their info
+      if (existingIndex >= 0) {
+        const updatedParticipants = [...prev];
+        updatedParticipants[existingIndex] = {
+          ...updatedParticipants[existingIndex],
+          ...updatedParticipant,
+        };
+        return updatedParticipants;
+      } 
+      
+      // Otherwise, add as new participant
+      toast({
+        title: "New participant joined",
+        description: `${metadata.displayName || "A user"} has joined the room`,
+      });
+      return [...prev, updatedParticipant];
+    });
+  };
+
+  // Remove a participant from the list when they leave
+  const removeParticipant = (participantId: string) => {
+    setRemoteParticipants(prev => {
+      const participant = prev.find(p => p.userId === participantId);
+      if (participant) {
+        toast({
+          title: "Participant left",
+          description: `${participant.displayName} has left the room`,
+        });
+      }
+      return prev.filter(p => p.userId !== participantId);
+    });
   };
 
   // Initialize WebRTC and signaling
@@ -95,9 +157,13 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
         isCameraOn: status.isCameraOn,
         isMicOn: status.isMicOn,
         isScreenSharing: status.isScreenSharing,
-        connectionState: connectionState
+        connectionState: connectionState,
+        joinedAt: Date.now()
       });
       setHasRemoteUser(true);
+      
+      // Also update the participants list
+      updateRemoteParticipantsList(status.userId, status);
     });
 
     webrtcConnection.current.onConnectionStateChange((state) => {
@@ -122,6 +188,21 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
       handleSignalingMessage
     );
 
+    // Send an initial presence message
+    setTimeout(() => {
+      signalingService.current?.send({
+        type: "presence",
+        sender: userId,
+        metadata: {
+          displayName: userDisplayName,
+          userId: userId,
+          isCameraOn: false,
+          isMicOn: false,
+          isScreenSharing: false
+        }
+      });
+    }, 500);
+
     // Attempt to connect after a short delay
     const connectTimer = setTimeout(() => {
       webrtcConnection.current?.createOffer();
@@ -132,12 +213,41 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
       });
     }, 1000);
 
+    // Set up a heartbeat to detect disconnected users
+    const heartbeatInterval = setInterval(() => {
+      signalingService.current?.send({
+        type: "presence",
+        sender: userId,
+        metadata: {
+          displayName: userDisplayName,
+          userId: userId,
+          isCameraOn: isCameraOn,
+          isMicOn: isMicOn,
+          isScreenSharing: isScreenSharing
+        }
+      });
+    }, 5000);
+
+    // Handle page unload to notify others that we're leaving
+    const handleUnload = () => {
+      if (signalingService.current) {
+        signalingService.current.send({
+          type: "participant-left",
+          sender: userId
+        });
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+
     return () => {
       clearTimeout(connectTimer);
+      clearInterval(heartbeatInterval);
+      window.removeEventListener('beforeunload', handleUnload);
       webrtcConnection.current?.close();
       signalingService.current?.stop();
     };
-  }, [roomId, userId, userDisplayName, toast, connectionState]);
+  }, [roomId, userId, userDisplayName, toast, connectionState, isCameraOn, isMicOn, isScreenSharing]);
 
   // Set up the remote stream and check connection status
   useEffect(() => {
@@ -171,7 +281,8 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
             isCameraOn: remoteMediaStream.getVideoTracks().length > 0,
             isMicOn: remoteMediaStream.getAudioTracks().length > 0,
             isScreenSharing: false,
-            connectionState: connectionState
+            connectionState: connectionState,
+            joinedAt: Date.now()
           });
         }
       }
@@ -400,6 +511,7 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
     isConnected,
     hasRemoteUser,
     remoteParticipant,
+    remoteParticipants,
     connectionState,
     userDisplayName,
     toggleCamera,

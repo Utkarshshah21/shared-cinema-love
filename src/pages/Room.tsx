@@ -26,6 +26,7 @@ import {
   TableHeader, 
   TableRow 
 } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
 
 const Room = () => {
   const { roomId } = useParams();
@@ -50,6 +51,7 @@ const Room = () => {
     isConnected,
     hasRemoteUser,
     remoteParticipant,
+    remoteParticipants,
     connectionState,
     userDisplayName,
     toggleCamera,
@@ -101,6 +103,14 @@ const Room = () => {
     }
   }, [remoteStream]);
 
+  // Listen for remote participants
+  useEffect(() => {
+    // Update toast notifications for remote participants
+    if (remoteParticipants.length > 0) {
+      console.log("Remote participants updated:", remoteParticipants);
+    }
+  }, [remoteParticipants]);
+
   return (
     <div className="min-h-screen p-4 md:p-8">
       <div className="flex justify-between items-center mb-6">
@@ -150,7 +160,7 @@ const Room = () => {
           <Dialog>
             <DialogTrigger asChild>
               <Button variant="outline" className="flex items-center mr-2">
-                <Users size={16} className="mr-2" /> Participants
+                <Users size={16} className="mr-2" /> Participants ({remoteParticipants.length + 1})
               </Button>
             </DialogTrigger>
             <DialogContent>
@@ -173,12 +183,15 @@ const Room = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {/* Current user (you) */}
                     <TableRow>
                       <TableCell className="flex items-center">
                         <Avatar className="h-8 w-8 mr-2 bg-purple-200">
                           <AvatarFallback>{userDisplayName.slice(0, 2).toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <span>{userDisplayName} (You)</span>
+                        <span>
+                          {userDisplayName} <Badge variant="outline">You</Badge>
+                        </span>
                       </TableCell>
                       <TableCell>
                         {isCameraOn ? (
@@ -219,16 +232,18 @@ const Room = () => {
                         </span>
                       </TableCell>
                     </TableRow>
-                    {remoteParticipant && (
-                      <TableRow>
+
+                    {/* Remote participants */}
+                    {remoteParticipants.map((participant) => (
+                      <TableRow key={participant.userId}>
                         <TableCell className="flex items-center">
                           <Avatar className="h-8 w-8 mr-2 bg-green-200">
-                            <AvatarFallback>{remoteParticipant.displayName.slice(0, 2).toUpperCase()}</AvatarFallback>
+                            <AvatarFallback>{participant.displayName.slice(0, 2).toUpperCase()}</AvatarFallback>
                           </Avatar>
-                          <span>{remoteParticipant.displayName}</span>
+                          <span>{participant.displayName}</span>
                         </TableCell>
                         <TableCell>
-                          {remoteParticipant.isCameraOn ? (
+                          {participant.isCameraOn ? (
                             <span className="text-green-600 flex items-center">
                               <VideoIcon size={16} className="mr-1" /> On
                             </span>
@@ -239,7 +254,7 @@ const Room = () => {
                           )}
                         </TableCell>
                         <TableCell>
-                          {remoteParticipant.isMicOn ? (
+                          {participant.isMicOn ? (
                             <span className="text-green-600 flex items-center">
                               <MicIcon size={16} className="mr-1" /> On
                             </span>
@@ -250,7 +265,7 @@ const Room = () => {
                           )}
                         </TableCell>
                         <TableCell>
-                          {remoteParticipant.isScreenSharing ? (
+                          {participant.isScreenSharing ? (
                             <span className="text-green-600 flex items-center">
                               <ScreenShareIcon size={16} className="mr-1" /> Yes
                             </span>
@@ -264,6 +279,15 @@ const Room = () => {
                           <span className="text-green-600 flex items-center">
                             <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span> Connected
                           </span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    
+                    {/* Show message if no remote users */}
+                    {remoteParticipants.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-gray-500 py-4">
+                          No other participants yet. Share the room link to invite someone.
                         </TableCell>
                       </TableRow>
                     )}
@@ -288,18 +312,13 @@ const Room = () => {
                 <span className="font-medium">{userName} (You)</span>
                 <span className="text-xs text-gray-500">Host</span>
               </div>
-              {remoteParticipant && (
-                <>
-                  <Separator orientation="vertical" className="h-4 mx-3" />
-                  <Avatar className="h-8 w-8 mr-2 bg-green-200">
-                    <AvatarFallback>{remoteParticipant.displayName.slice(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
-                  <div className="flex flex-col">
-                    <span className="font-medium text-green-600">{remoteParticipant.displayName}</span>
-                    <span className="text-xs text-gray-500">Participant</span>
-                  </div>
-                </>
-              )}
+              
+              {/* Live participants indicator */}
+              <div className="ml-4 flex items-center">
+                <Badge variant="outline" className="flex items-center bg-green-50 text-green-700 border-green-200">
+                  <Users size={14} className="mr-1" /> {remoteParticipants.length + 1} participant{remoteParticipants.length !== 0 ? 's' : ''}
+                </Badge>
+              </div>
             </div>
             
             <div className="text-sm text-muted-foreground">
@@ -314,11 +333,26 @@ const Room = () => {
               <span className="ml-2 text-xs text-gray-400">{connectionState}</span>
               {hasRemoteUser && (
                 <span className="ml-2 text-green-500 font-medium flex items-center">
-                  <User size={14} className="mr-1" /> {remoteParticipant ? '1' : '0'} connected
+                  <User size={14} className="mr-1" /> {remoteParticipants.length} remote
                 </span>
               )}
             </div>
           </div>
+          
+          {/* Show connected users avatars */}
+          {remoteParticipants.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {remoteParticipants.map((participant) => (
+                <div key={participant.userId} className="flex items-center bg-green-50 rounded-full px-2 py-1">
+                  <Avatar className="h-6 w-6 mr-1 bg-green-200">
+                    <AvatarFallback>{participant.displayName.slice(0, 2).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <span className="text-sm text-green-700">{participant.displayName}</span>
+                  <span className="ml-1 w-2 h-2 bg-green-500 rounded-full"></span>
+                </div>
+              ))}
+            </div>
+          )}
           
           <Tabs defaultValue="video" className="mb-6">
             <TabsList className="bg-purple-100">
@@ -407,6 +441,14 @@ const Room = () => {
                         <p className="text-sm text-muted-foreground mt-2">
                           Share your room link with a friend to connect
                         </p>
+                        
+                        {/* If users are connected but no video */}
+                        {remoteParticipants.length > 0 && (
+                          <div className="mt-4 text-green-600">
+                            <UserCheck size={24} className="mx-auto mb-2" />
+                            <p>{remoteParticipants.length} user{remoteParticipants.length > 1 ? 's' : ''} connected without video</p>
+                          </div>
+                        )}
                       </div>
                     ) : remoteStream && remoteStream.getVideoTracks().length === 0 ? (
                       <div className="text-center">

@@ -1,3 +1,4 @@
+
 // A simple implementation of WebRTC peer connection
 import { toast } from "@/components/ui/use-toast";
 
@@ -55,6 +56,9 @@ export class WebRTCConnection {
   private remoteDisplayName: string | null = null;
   private onRemoteUserStatusChangeCallback: ((status: { isCameraOn: boolean, isMicOn: boolean, isScreenSharing: boolean, displayName: string, userId: string }) => void) | null = null;
   private onConnectionStateChangeCallback: ((state: string) => void) | null = null;
+  private lastActivity: number = Date.now();
+  private presenceCheckInterval: number | null = null;
+  private activeRemoteUsers: Set<string> = new Set();
 
   constructor(
     userId: string,
@@ -67,6 +71,7 @@ export class WebRTCConnection {
     this.displayName = displayName;
     this.signalingCallback = signalingCallback;
     this.initialize();
+    this.startPresenceCheck();
   }
 
   // Initialize WebRTC peer connection
@@ -119,12 +124,18 @@ export class WebRTCConnection {
       console.log("Track received:", event.track.kind);
       this.remoteStream.addTrack(event.track);
       this.hasRemoteUser = true;
+      this.lastActivity = Date.now();
+      
+      // Add to active users
+      if (this.remotePeerId) {
+        this.activeRemoteUsers.add(this.remotePeerId);
+      }
       
       // Update remote user status
       if (this.onRemoteUserStatusChangeCallback) {
         this.onRemoteUserStatusChangeCallback({
-          isCameraOn: this.remotePeerId !== null,
-          isMicOn: true,
+          isCameraOn: event.track.kind === 'video',
+          isMicOn: event.track.kind === 'audio',
           isScreenSharing: false,
           displayName: this.remoteDisplayName || "Remote User",
           userId: this.remotePeerId || ""
@@ -137,6 +148,34 @@ export class WebRTCConnection {
         description: "Someone joined your room",
       });
     };
+  }
+
+  // Start a regular check for active participants
+  private startPresenceCheck() {
+    this.presenceCheckInterval = window.setInterval(() => {
+      // Send presence info periodically
+      this.signalingCallback({
+        type: "presence",
+        sender: this.userId,
+        metadata: {
+          displayName: this.displayName,
+          userId: this.userId,
+          isCameraOn: this.localStream ? this.localStream.getVideoTracks().length > 0 : false,
+          isMicOn: this.localStream ? this.localStream.getAudioTracks().length > 0 : false,
+          isScreenSharing: this.localStream ? this.localStream.getVideoTracks().some(track => track.label.includes('screen')) : false
+        }
+      });
+      
+      // Check for stale connections (users who haven't sent updates in a while)
+      const now = Date.now();
+      if (now - this.lastActivity > 15000 && this.hasRemoteUser) {
+        console.log("Remote user appears inactive, checking connection");
+        if (this.peerConnection && (this.peerConnection.connectionState === "disconnected" || 
+            this.peerConnection.connectionState === "failed")) {
+          this.attemptReconnect();
+        }
+      }
+    }, 3000);
   }
 
   // Register callback for remote user status changes
@@ -267,6 +306,8 @@ export class WebRTCConnection {
       // Save remote peer info
       this.remotePeerId = sender;
       this.remoteDisplayName = metadata?.displayName || "Remote User";
+      this.lastActivity = Date.now();
+      this.activeRemoteUsers.add(sender);
       
       if (this.onRemoteUserStatusChangeCallback && metadata) {
         this.onRemoteUserStatusChangeCallback({
@@ -333,6 +374,8 @@ export class WebRTCConnection {
       // Save remote peer info
       this.remotePeerId = sender;
       this.remoteDisplayName = metadata?.displayName || "Remote User";
+      this.lastActivity = Date.now();
+      this.activeRemoteUsers.add(sender);
       
       if (this.onRemoteUserStatusChangeCallback && metadata) {
         this.onRemoteUserStatusChangeCallback({
@@ -372,8 +415,17 @@ export class WebRTCConnection {
 
   // Handle presence messages from other peers
   handlePresence(senderId: string, metadata?: any) {
+    // Update last activity time
+    this.lastActivity = Date.now();
+    
+    // Add to active users
+    if (senderId !== this.userId) {
+      this.activeRemoteUsers.add(senderId);
+    }
+    
     // If we receive a presence message and we're not connected yet, send an offer
-    if (this.connectionState === "new" || this.connectionState === "connecting") {
+    if ((this.connectionState === "new" || this.connectionState === "connecting") && 
+        senderId !== this.userId) {
       console.log("Received presence from peer, creating offer...");
       
       // Save remote peer info
@@ -398,6 +450,14 @@ export class WebRTCConnection {
 
   // Handle status updates from other peers
   handleStatusUpdate(senderId: string, metadata?: any) {
+    // Update last activity time
+    this.lastActivity = Date.now();
+    
+    // Add to active users
+    if (senderId !== this.userId) {
+      this.activeRemoteUsers.add(senderId);
+    }
+    
     if (senderId === this.remotePeerId && metadata && this.onRemoteUserStatusChangeCallback) {
       this.onRemoteUserStatusChangeCallback({
         isCameraOn: metadata.isCameraOn || false,
@@ -416,7 +476,7 @@ export class WebRTCConnection {
   
   // Check if we have a remote user
   hasRemoteUserConnected() {
-    return this.hasRemoteUser;
+    return this.hasRemoteUser || this.activeRemoteUsers.size > 0;
   }
 
   // Get connection state
@@ -434,6 +494,11 @@ export class WebRTCConnection {
     return this.remotePeerId;
   }
   
+  // Get all active remote users
+  getActiveRemoteUsers() {
+    return Array.from(this.activeRemoteUsers);
+  }
+  
   // Update display name
   updateDisplayName(displayName: string) {
     this.displayName = displayName;
@@ -445,6 +510,11 @@ export class WebRTCConnection {
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    
+    if (this.presenceCheckInterval !== null) {
+      window.clearInterval(this.presenceCheckInterval);
+      this.presenceCheckInterval = null;
     }
     
     if (this.peerConnection) {
@@ -475,6 +545,8 @@ export class SignalingService {
   private presenceInterval: number | null = null;
   private lastHeartbeat: number = Date.now();
   private displayName: string;
+  private participantCache: Map<string, number> = new Map(); // Store last activity time for each participant
+  private participantCleanupInterval: number | null = null;
 
   constructor(
     roomId: string,
@@ -489,6 +561,7 @@ export class SignalingService {
     this.storageKey = `signaling_${this.roomId}`;
     this.startListening();
     this.startPresenceHeartbeat();
+    this.startParticipantCleanup();
   }
 
   // Send signaling data
@@ -511,6 +584,11 @@ export class SignalingService {
       localStorage.setItem(this.storageKey, JSON.stringify(recentMessages));
       
       console.log(`Sent signal: ${data.type} from ${this.userId} ${data.target ? 'to ' + data.target : ''}`);
+      
+      // Update participant cache for presence messages
+      if (data.type === "presence" && data.sender) {
+        this.participantCache.set(data.sender, Date.now());
+      }
     } catch (error) {
       console.error("Error sending signaling data:", error);
     }
@@ -542,6 +620,30 @@ export class SignalingService {
       });
     }, 3000);
   }
+  
+  // Start cleanup of inactive participants
+  private startParticipantCleanup() {
+    this.participantCleanupInterval = window.setInterval(() => {
+      const now = Date.now();
+      
+      // Check for inactive participants (no presence updates in the last 10 seconds)
+      for (const [participantId, lastSeen] of this.participantCache.entries()) {
+        if (now - lastSeen > 10000 && participantId !== this.userId) {
+          console.log(`Participant ${participantId} appears to be inactive`);
+          
+          // Send a participant-left message
+          this.send({
+            type: "participant-left",
+            sender: participantId,
+            timestamp: now
+          });
+          
+          // Remove from cache
+          this.participantCache.delete(participantId);
+        }
+      }
+    }, 5000);
+  }
 
   // Start listening for signaling messages
   private startListening() {
@@ -572,6 +674,12 @@ export class SignalingService {
           // Forward new messages to the callback
           newMessages.forEach((msg: SignalingData) => {
             console.log(`Received signal: ${msg.type} from ${msg.sender}`);
+            
+            // Update participant cache for presence messages
+            if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
+              this.participantCache.set(msg.sender, Date.now());
+            }
+            
             this.callback(msg);
           });
         }
@@ -597,6 +705,18 @@ export class SignalingService {
       window.clearInterval(this.presenceInterval);
       this.presenceInterval = null;
     }
+    
+    if (this.participantCleanupInterval !== null) {
+      window.clearInterval(this.participantCleanupInterval);
+      this.participantCleanupInterval = null;
+    }
+    
+    // Send a final participant-left message
+    this.send({
+      type: "participant-left",
+      sender: this.userId,
+      timestamp: Date.now()
+    });
   }
 
   // Generate shareable room URL

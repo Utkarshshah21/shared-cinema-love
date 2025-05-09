@@ -936,4 +936,5 @@ export class SignalingService {
         // Also check sessionStorage for any missed messages
         try {
           const sessionKey = `${this.storageKey}_latest`;
-          const latestMsg = sessionStorage.getItem(sessionKey);}
+          const latestMsg = sessionStorage.getItem(sessionKey);
+        }

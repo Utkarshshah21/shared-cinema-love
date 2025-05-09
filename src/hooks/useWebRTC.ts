@@ -1,10 +1,19 @@
 
 import { useState, useEffect, useRef } from 'react';
-import { WebRTCConnection, SignalingService, SignalingData } from '@/utils/webrtc';
+import { WebRTCConnection, SignalingService, SignalingData, Participant } from '@/utils/webrtc';
 import { useToast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
 
-export function useWebRTC(roomId: string) {
+export interface RemoteParticipant {
+  userId: string;
+  displayName: string;
+  isCameraOn: boolean;
+  isMicOn: boolean;
+  isScreenSharing: boolean;
+  connectionState: string;
+}
+
+export function useWebRTC(roomId: string, displayName: string = "User") {
   const { toast } = useToast();
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -13,9 +22,12 @@ export function useWebRTC(roomId: string) {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [hasRemoteUser, setHasRemoteUser] = useState(false);
+  const [remoteParticipant, setRemoteParticipant] = useState<RemoteParticipant | null>(null);
+  const [connectionState, setConnectionState] = useState<string>("new");
   
   // Generate a random user ID for this session
   const userId = useRef(uuidv4()).current;
+  const userDisplayName = useRef(displayName || "User " + userId.slice(0, 4)).current;
   
   const webrtcConnection = useRef<WebRTCConnection | null>(null);
   const signalingService = useRef<SignalingService | null>(null);
@@ -30,12 +42,15 @@ export function useWebRTC(roomId: string) {
         case 'offer':
           webrtcConnection.current.handleOffer(
             { type: 'offer', sdp: data.sdp } as RTCSessionDescriptionInit,
-            data.sender
+            data.sender,
+            data.metadata
           );
           break;
         case 'answer':
           webrtcConnection.current.handleAnswer(
-            { type: 'answer', sdp: data.sdp } as RTCSessionDescriptionInit
+            { type: 'answer', sdp: data.sdp } as RTCSessionDescriptionInit,
+            data.sender,
+            data.metadata
           );
           break;
         case 'ice-candidate':
@@ -44,7 +59,10 @@ export function useWebRTC(roomId: string) {
           }
           break;
         case 'presence':
-          webrtcConnection.current.handlePresence(data.sender);
+          webrtcConnection.current.handlePresence(data.sender, data.metadata);
+          break;
+        case 'status-update':
+          webrtcConnection.current.handleStatusUpdate(data.sender, data.metadata);
           break;
         default:
           console.log('Unknown signaling message type:', data.type);
@@ -61,17 +79,46 @@ export function useWebRTC(roomId: string) {
       signalingService.current?.send(data);
     };
 
-    // Initialize WebRTC connection
+    // Initialize WebRTC connection with display name
     webrtcConnection.current = new WebRTCConnection(
       userId,
       roomId,
+      userDisplayName,
       sendSignalingMessage
     );
 
-    // Initialize signaling service
+    // Set up callbacks for remote user status and connection state
+    webrtcConnection.current.onRemoteUserStatusChange((status) => {
+      setRemoteParticipant({
+        userId: status.userId,
+        displayName: status.displayName,
+        isCameraOn: status.isCameraOn,
+        isMicOn: status.isMicOn,
+        isScreenSharing: status.isScreenSharing,
+        connectionState: connectionState
+      });
+      setHasRemoteUser(true);
+    });
+
+    webrtcConnection.current.onConnectionStateChange((state) => {
+      setConnectionState(state);
+      
+      if (state === 'connected' || state === 'completed') {
+        setIsConnected(true);
+      } else {
+        setIsConnected(state === 'connecting');
+      }
+
+      if (remoteParticipant) {
+        setRemoteParticipant({...remoteParticipant, connectionState: state});
+      }
+    });
+
+    // Initialize signaling service with display name
     signalingService.current = new SignalingService(
       roomId,
       userId,
+      userDisplayName,
       handleSignalingMessage
     );
 
@@ -90,7 +137,7 @@ export function useWebRTC(roomId: string) {
       webrtcConnection.current?.close();
       signalingService.current?.stop();
     };
-  }, [roomId, userId, toast]);
+  }, [roomId, userId, userDisplayName, toast, connectionState]);
 
   // Set up the remote stream and check connection status
   useEffect(() => {
@@ -115,13 +162,25 @@ export function useWebRTC(roomId: string) {
           setRemoteStream(null);
           setTimeout(() => setRemoteStream(remoteMediaStream), 10);
         }
+
+        // If we have a remote user but no participant info, try to get it
+        if (hasRemoteUser && !remoteParticipant && webrtcConnection.current.getRemoteUserId()) {
+          setRemoteParticipant({
+            userId: webrtcConnection.current.getRemoteUserId() || "",
+            displayName: webrtcConnection.current.getRemoteDisplayName(),
+            isCameraOn: remoteMediaStream.getVideoTracks().length > 0,
+            isMicOn: remoteMediaStream.getAudioTracks().length > 0,
+            isScreenSharing: false,
+            connectionState: connectionState
+          });
+        }
       }
     }, 1000);
 
     return () => {
       clearInterval(statusCheckInterval);
     };
-  }, [isConnected]);
+  }, [isConnected, remoteParticipant]);
 
   // Toggle camera
   const toggleCamera = async () => {
@@ -137,6 +196,14 @@ export function useWebRTC(roomId: string) {
         });
       }
       setIsCameraOn(false);
+      
+      // Update WebRTC to reflect camera status
+      if (webrtcConnection.current) {
+        const audioOnlyStream = localStream ? new MediaStream(localStream.getAudioTracks()) : null;
+        if (audioOnlyStream) {
+          webrtcConnection.current.setLocalStream(audioOnlyStream);
+        }
+      }
     } else {
       try {
         // Turn off screen sharing first if active
@@ -282,6 +349,12 @@ export function useWebRTC(roomId: string) {
         });
       }
       setIsMicOn(false);
+      
+      // Update WebRTC connection
+      if (webrtcConnection.current && localStream) {
+        const videoOnlyStream = new MediaStream(localStream.getVideoTracks());
+        webrtcConnection.current.setLocalStream(videoOnlyStream);
+      }
     } else {
       try {
         // Request microphone access
@@ -326,6 +399,9 @@ export function useWebRTC(roomId: string) {
     isScreenSharing,
     isConnected,
     hasRemoteUser,
+    remoteParticipant,
+    connectionState,
+    userDisplayName,
     toggleCamera,
     toggleMic,
     toggleScreenShare

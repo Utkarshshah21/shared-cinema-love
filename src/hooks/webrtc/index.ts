@@ -14,16 +14,19 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   const { toast } = useToast();
   
   // Generate a random user ID for this session that persists across refreshes
-  const userId = useRef<string>(() => {
-    // Try to get existing userId from sessionStorage
-    const existingId = sessionStorage.getItem(`webrtc_user_id_${roomId}`);
-    if (existingId) return existingId;
-    
-    // Create new ID if none exists
-    const newId = uuidv4();
-    sessionStorage.setItem(`webrtc_user_id_${roomId}`, newId);
-    return newId;
-  }).current;
+  const userId = useRef<string>(
+    // Initialize with existing ID from sessionStorage or create a new one
+    (() => {
+      // Try to get existing userId from sessionStorage
+      const existingId = sessionStorage.getItem(`webrtc_user_id_${roomId}`);
+      if (existingId) return existingId;
+      
+      // Create new ID if none exists
+      const newId = uuidv4();
+      sessionStorage.setItem(`webrtc_user_id_${roomId}`, newId);
+      return newId;
+    })()
+  ).current;
   
   const userDisplayName = useRef(displayName || "User " + userId.slice(0, 4)).current;
   

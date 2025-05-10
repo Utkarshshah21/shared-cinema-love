@@ -1,4 +1,5 @@
-import { useState } from 'react';
+
+import { useState, useEffect } from 'react';
 import { RemoteParticipant } from './types';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -8,6 +9,8 @@ export function useParticipantTracking() {
   
   // Update remote participants list from signaling data
   const updateRemoteParticipantsList = (senderId: string, metadata: any, connectionState: string) => {
+    if (!senderId) return; // Skip if no sender ID
+    
     setRemoteParticipants(prev => {
       // Check if this participant already exists
       const existingIndex = prev.findIndex(p => p.userId === senderId);
@@ -37,12 +40,16 @@ export function useParticipantTracking() {
         title: "New participant joined",
         description: `${metadata.displayName || "A user"} has joined the room`,
       });
+      
+      console.log(`Adding new participant: ${senderId} - ${metadata.displayName}`);
       return [...prev, updatedParticipant];
     });
   };
 
   // Remove a participant from the list when they leave
   const removeParticipant = (participantId: string) => {
+    if (!participantId) return; // Skip if no participant ID
+    
     setRemoteParticipants(prev => {
       const participant = prev.find(p => p.userId === participantId);
       if (participant) {
@@ -50,10 +57,30 @@ export function useParticipantTracking() {
           title: "Participant left",
           description: `${participant.displayName} has left the room`,
         });
+        console.log(`Removing participant: ${participantId} - ${participant.displayName}`);
       }
       return prev.filter(p => p.userId !== participantId);
     });
   };
+
+  // Clean up stale participants
+  useEffect(() => {
+    const staleCheckInterval = setInterval(() => {
+      const now = Date.now();
+      setRemoteParticipants(prev => {
+        // Filter out participants who haven't updated in the last 12 seconds
+        return prev.filter(participant => {
+          const isStale = now - participant.joinedAt > 12000;
+          if (isStale) {
+            console.log(`Removing stale participant: ${participant.userId}`);
+          }
+          return !isStale;
+        });
+      });
+    }, 5000);
+    
+    return () => clearInterval(staleCheckInterval);
+  }, []);
 
   return {
     remoteParticipants,

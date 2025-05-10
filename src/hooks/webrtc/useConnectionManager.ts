@@ -59,9 +59,9 @@ export function useConnectionManager(
         metadata: {
           displayName: userDisplayName,
           userId: userId,
-          isCameraOn: false,
-          isMicOn: false,
-          isScreenSharing: false
+          isCameraOn: isCameraOn,
+          isMicOn: isMicOn,
+          isScreenSharing: isScreenSharing
         }
       });
     }, 500);
@@ -89,7 +89,7 @@ export function useConnectionManager(
           isScreenSharing: isScreenSharing
         }
       });
-    }, 5000);
+    }, 3000);
 
     // Handle page unload to notify others that we're leaving
     const handleUnload = () => {
@@ -131,12 +131,18 @@ export function useConnectionManager(
           setRemoteParticipant({
             userId: webrtcConnection.current.getRemoteUserId() || "",
             displayName: webrtcConnection.current.getRemoteDisplayName(),
-            isCameraOn: remoteMediaStream.getVideoTracks().length > 0,
-            isMicOn: remoteMediaStream.getAudioTracks().length > 0,
+            isCameraOn: remoteMediaStream?.getVideoTracks().length > 0,
+            isMicOn: remoteMediaStream?.getAudioTracks().length > 0,
             isScreenSharing: false,
             connectionState: connectionState,
             joinedAt: Date.now()
           });
+        }
+        
+        // Check for active remote users
+        const activeUsers = webrtcConnection.current.getActiveRemoteUsers();
+        if (activeUsers && activeUsers.length > 0) {
+          setHasRemoteUser(true);
         }
       }
     }, 1000);

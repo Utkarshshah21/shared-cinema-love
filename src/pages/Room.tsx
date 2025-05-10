@@ -132,18 +132,6 @@ const Room = () => {
       setConnectionStatus('failed');
     }
   }, [connectionState]);
-  
-  // This function will be triggered when the user clicks the "Join now" button
-  const joinRoom = () => {
-    // Already joined, do nothing
-    toast({
-      title: "Joined room",
-      description: `You've successfully joined room: ${roomId}`,
-    });
-    
-    // Save username to session storage
-    sessionStorage.setItem('webrtc_user_name', userName);
-  };
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -459,14 +447,6 @@ const Room = () => {
                 className={isScreenSharing ? "bg-purple-500 hover:bg-purple-600" : ""}
               >
                 {isScreenSharing ? <ScreenShareIcon size={18} /> : <ScreenShareOffIcon size={18} />}
-              </Button>
-              
-              <Button 
-                variant="default"
-                onClick={joinRoom}
-                className="bg-green-500 hover:bg-green-600"
-              >
-                Join Now
               </Button>
             </div>
             

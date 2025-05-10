@@ -15,6 +15,7 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   
   // Generate a random user ID for this session that persists across refreshes
   const userId = useRef<string>(
+    // Use an IIFE to initialize the ref value correctly
     (() => {
       // Try to get existing userId from sessionStorage
       const existingId = sessionStorage.getItem(`webrtc_user_id_${roomId}`);
@@ -37,8 +38,24 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   // Clear room data on first visit (helps avoid stale signaling data)
   useEffect(() => {
     if (typeof SignalingService !== 'undefined') {
-      // Clear room data, but only partially to allow reconnections
+      // Clear outdated room data to avoid connection issues
       SignalingService.cleanupOldRoomData(roomId);
+      
+      // Also clear any stale user IDs if they're too old
+      const lastActiveTimestamp = sessionStorage.getItem(`webrtc_last_active_${roomId}`);
+      if (lastActiveTimestamp) {
+        const lastActiveTime = parseInt(lastActiveTimestamp, 10);
+        const currentTime = Date.now();
+        // If last active time was more than 12 hours ago, generate a new user ID
+        if (currentTime - lastActiveTime > 12 * 60 * 60 * 1000) {
+          const newId = uuidv4();
+          sessionStorage.setItem(`webrtc_user_id_${roomId}`, newId);
+          console.log("Generated new user ID due to stale session:", newId);
+        }
+      }
+      
+      // Update last active timestamp
+      sessionStorage.setItem(`webrtc_last_active_${roomId}`, Date.now().toString());
     }
     
     // Send a beacon when the page unloads to notify others
@@ -80,18 +97,18 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   const [connectionStateLog, setConnectionStateLog] = useState<string[]>([]);
   const [connectionState, setConnectionState] = useState<string>("new");
   
-  // Periodically attempt reconnection if needed
+  // Periodically attempt reconnection if needed more aggressively
   useEffect(() => {
     let reconnectInterval: number | null = null;
     
     if (connectionState === "failed" || connectionState === "disconnected") {
       reconnectInterval = window.setInterval(() => {
-        console.log("Periodic reconnection attempt...");
+        console.log("Reconnection attempt...");
         if (webrtcConnection.current) {
           webrtcConnection.current.refreshIceServers();
-          webrtcConnection.current.createOffer();
+          webrtcConnection.current.createOffer(true); // Force a new offer
         }
-      }, 5000);
+      }, 2000); // More frequent reconnection attempts (reduced from 5000ms)
     }
     
     return () => {
@@ -106,7 +123,27 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     console.log(`WebRTC connection state: ${state}`);
     setConnectionState(state);
     setConnectionStateLog(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${state}`]);
-  }, []);
+    
+    // Notify user of connection changes
+    if (state === "connected") {
+      toast({
+        title: "Connection established",
+        description: "You're now connected to the room",
+      });
+    } else if (state === "failed") {
+      toast({
+        title: "Connection failed",
+        description: "Unable to connect to the room. Trying again...",
+        variant: "destructive"
+      });
+    } else if (state === "disconnected") {
+      toast({
+        title: "Disconnected",
+        description: "Connection lost. Reconnecting...",
+        variant: "destructive"
+      });
+    }
+  }, [toast]);
   
   // Create signaling callback
   const sendSignalingMessage = useCallback((data: any) => {
@@ -152,7 +189,7 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
         if (webrtcConnection.current && webrtcConnection.current.refreshIceServers) {
           webrtcConnection.current.refreshIceServers();
         }
-      }, 30000); // every 30 seconds
+      }, 20000); // More frequent refresh (reduced from 30000ms)
       
       const cleanupHandler = () => {
         if (signalingService.current) {
@@ -166,19 +203,48 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
       window.addEventListener('beforeunload', cleanupHandler);
       
       // Create initial offer after a brief delay to allow signaling setup
+      // but also use different timing for different users to reduce collision
+      const offerDelay = Math.floor(500 + Math.random() * 1000);
       setTimeout(() => {
         if (webrtcConnection.current) {
+          console.log(`Creating initial offer after ${offerDelay}ms delay`);
+          webrtcConnection.current.createOffer();
+          
+          // Also start sending presence messages immediately
+          if (signalingService.current) {
+            signalingService.current.send({
+              type: "presence",
+              sender: userId,
+              metadata: {
+                displayName: userDisplayName,
+                userId: userId,
+                isCameraOn: isCameraOn,
+                isMicOn: isMicOn,
+                isScreenSharing: isScreenSharing
+              },
+              timestamp: Date.now()
+            });
+          }
+        }
+      }, offerDelay);
+      
+      // Set up periodic offer creation to ensure connection attempts continue
+      const periodicOfferInterval = setInterval(() => {
+        if (webrtcConnection.current && connectionState !== "connected" && connectionState !== "completed") {
+          console.log("Creating periodic offer to ensure connection attempts continue");
+          webrtcConnection.current.refreshIceServers();
           webrtcConnection.current.createOffer();
         }
-      }, 1000);
+      }, 8000); // Every 8 seconds while not connected
       
       return () => {
         window.removeEventListener('beforeunload', cleanupHandler);
         clearInterval(refreshIceServersInterval);
+        clearInterval(periodicOfferInterval);
         cleanupHandler();
       };
     }
-  }, [roomId, userId, userDisplayName, handleSignalingMessage, handleConnectionStateChange, sendSignalingMessage]);
+  }, [roomId, userId, userDisplayName, handleSignalingMessage, handleConnectionStateChange, sendSignalingMessage, connectionState, isCameraOn, isMicOn, isScreenSharing]);
   
   // Connection manager
   const { isConnected, hasRemoteUser, remoteParticipant } = 

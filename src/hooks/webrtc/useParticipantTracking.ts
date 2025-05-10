@@ -68,16 +68,16 @@ export function useParticipantTracking() {
     const staleCheckInterval = setInterval(() => {
       const now = Date.now();
       setRemoteParticipants(prev => {
-        // Filter out participants who haven't updated in the last 30 seconds (increased from 12s)
+        // Only remove participants that haven't updated in the last 45 seconds (increased from 30s)
         return prev.filter(participant => {
-          const isStale = now - participant.joinedAt > 30000;
+          const isStale = now - participant.joinedAt > 45000;
           if (isStale) {
             console.log(`Removing stale participant: ${participant.userId}`);
           }
           return !isStale;
         });
       });
-    }, 10000); // Check less frequently (increased from 5000ms)
+    }, 15000); // Check less frequently (increased from 10000ms)
     
     return () => clearInterval(staleCheckInterval);
   }, []);

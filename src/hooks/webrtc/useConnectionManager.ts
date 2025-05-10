@@ -27,65 +27,80 @@ export function useConnectionManager(
     webrtcConnection.current.onRemoteUserStatusChange((status: any) => {
       setRemoteParticipant({
         userId: status.userId,
-        displayName: status.displayName,
-        isCameraOn: status.isCameraOn,
-        isMicOn: status.isMicOn,
-        isScreenSharing: status.isScreenSharing,
+        displayName: status.displayName || "Remote User",
+        isCameraOn: status.isCameraOn || false,
+        isMicOn: status.isMicOn || false,
+        isScreenSharing: status.isScreenSharing || false,
         connectionState: connectionState,
         joinedAt: Date.now()
       });
       setHasRemoteUser(true);
       
-      console.log(`Remote user status updated: ${status.displayName} (${status.userId})`, status);
+      console.log(`Remote user status updated: ${status.displayName || "Unknown"} (${status.userId})`, status);
     });
 
-    // Send an initial presence message
-    setTimeout(() => {
-      signalingService.current?.send({
-        type: "presence",
-        sender: userId,
-        metadata: {
-          displayName: userDisplayName,
-          userId: userId,
-          isCameraOn: isCameraOn,
-          isMicOn: isMicOn,
-          isScreenSharing: isScreenSharing
-        }
-      });
-    }, 500);
+    // Send an initial presence message immediately
+    signalingService.current?.send({
+      type: "presence",
+      sender: userId,
+      metadata: {
+        displayName: userDisplayName,
+        userId: userId,
+        isCameraOn: isCameraOn,
+        isMicOn: isMicOn,
+        isScreenSharing: isScreenSharing
+      },
+      timestamp: Date.now()
+    });
 
-    // Set up a heartbeat to detect disconnected users
+    // Set up a faster heartbeat to improve participant detection
     const heartbeatInterval = setInterval(() => {
-      signalingService.current?.send({
-        type: "presence",
-        sender: userId,
-        metadata: {
-          displayName: userDisplayName,
-          userId: userId,
-          isCameraOn: isCameraOn,
-          isMicOn: isMicOn,
-          isScreenSharing: isScreenSharing
-        }
-      });
-    }, 3000);
+      if (signalingService.current) {
+        signalingService.current.send({
+          type: "presence",
+          sender: userId,
+          metadata: {
+            displayName: userDisplayName,
+            userId: userId,
+            isCameraOn: isCameraOn,
+            isMicOn: isMicOn,
+            isScreenSharing: isScreenSharing
+          },
+          timestamp: Date.now()
+        });
+      }
+    }, 1000); // More frequent heartbeats (reduced from 3000ms)
 
     // Handle page unload to notify others that we're leaving
     const handleUnload = () => {
       if (signalingService.current) {
-        signalingService.current.send({
-          type: "participant-left",
-          sender: userId
-        });
+        // Send multiple leave messages to improve reliability
+        for (let i = 0; i < 3; i++) {
+          signalingService.current.send({
+            type: "participant-left",
+            sender: userId,
+            timestamp: Date.now()
+          });
+        }
       }
     };
 
     window.addEventListener('beforeunload', handleUnload);
+    
+    // Also send a periodic renegotiation request to ensure connections stay fresh
+    const renegotiationInterval = setInterval(() => {
+      if (webrtcConnection.current && hasRemoteUser && connectionState === 'connected') {
+        console.log("Sending periodic renegotiation request");
+        webrtcConnection.current.createOffer(true); // Force a renegotiation
+      }
+    }, 60000); // Once a minute
 
     return () => {
       clearInterval(heartbeatInterval);
+      clearInterval(renegotiationInterval);
       window.removeEventListener('beforeunload', handleUnload);
     };
-  }, [roomId, userId, userDisplayName, toast, connectionState, isCameraOn, isMicOn, isScreenSharing]);
+  }, [roomId, userId, userDisplayName, toast, connectionState, isCameraOn, isMicOn, isScreenSharing, hasRemoteUser]);
 
   // Update connection status based on connection state
   useEffect(() => {
@@ -98,11 +113,11 @@ export function useConnectionManager(
     }
   }, [connectionState]);
 
-  // Monitor connection status and remote stream
+  // Monitor connection status and remote stream more actively
   useEffect(() => {
     if (!webrtcConnection.current) return;
     
-    // Check for tracks and connection status every second
+    // Check for tracks and connection status more frequently
     const statusCheckInterval = setInterval(() => {
       if (webrtcConnection.current) {
         // Check if we have remote tracks
@@ -112,9 +127,14 @@ export function useConnectionManager(
         // If we have a remote user but no participant info, try to get it
         if (hasRemoteUser && !remoteParticipant && webrtcConnection.current.getRemoteUserId()) {
           const remoteMediaStream = webrtcConnection.current.getRemoteStream();
+          const remoteId = webrtcConnection.current.getRemoteUserId() || "";
+          const remoteName = webrtcConnection.current.getRemoteDisplayName() || "Remote User";
+          
+          console.log(`Remote user detected: ${remoteName} (${remoteId})`);
+          
           setRemoteParticipant({
-            userId: webrtcConnection.current.getRemoteUserId() || "",
-            displayName: webrtcConnection.current.getRemoteDisplayName() || "Remote User",
+            userId: remoteId,
+            displayName: remoteName,
             isCameraOn: remoteMediaStream?.getVideoTracks().length > 0 || false,
             isMicOn: remoteMediaStream?.getAudioTracks().length > 0 || false,
             isScreenSharing: false,
@@ -124,20 +144,28 @@ export function useConnectionManager(
         }
         
         // Check for active remote users
-        const activeUsers = webrtcConnection.current.getActiveRemoteUsers();
+        const activeUsers = webrtcConnection.current.getActiveRemoteUsers?.();
         if (activeUsers && activeUsers.length > 0) {
           setHasRemoteUser(true);
-          
-          // Log active users for debugging
           console.log("Active remote users:", activeUsers);
         }
+        
+        // Force reconnection if we're stuck in a pending state
+        if (connectionState === 'checking' || connectionState === 'connecting') {
+          const connectionTime = webrtcConnection.current.getConnectionTime?.();
+          if (connectionTime && Date.now() - connectionTime > 10000) {
+            console.log("Connection appears stuck, attempting to refresh");
+            webrtcConnection.current.refreshIceServers();
+            webrtcConnection.current.createOffer(true);
+          }
+        }
       }
-    }, 1000);
+    }, 500); // Check much more frequently (reduced from 1000ms)
 
     return () => {
       clearInterval(statusCheckInterval);
     };
-  }, [remoteParticipant]);
+  }, [remoteParticipant, connectionState]);
 
   return {
     isConnected,

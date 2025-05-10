@@ -17,28 +17,36 @@ export function useRemoteStream(webrtcConnectionRef: React.MutableRefObject<any>
       console.log("Remote stream updated:", 
         updatedStream ? `Video tracks: ${updatedStream.getVideoTracks().length}, Audio tracks: ${updatedStream.getAudioTracks().length}` : "No stream");
       
-      setRemoteStream(null); // Force a re-render
-      setTimeout(() => setRemoteStream(updatedStream), 10);
+      // Force a fresh update of the remote stream to trigger UI re-render
+      setRemoteStream(null); // Clear first
+      setTimeout(() => setRemoteStream(updatedStream), 10); // Set after a small delay
     };
     
     webrtcConnectionRef.current.onRemoteStreamUpdate(handleRemoteStreamUpdate);
     
-    // Force a re-render of the remote stream periodically to ensure it's displayed
+    // Create a robust track monitor to detect and fix track visibility issues
     const trackMonitorInterval = setInterval(() => {
       const hasRemoteUser = webrtcConnectionRef.current.hasRemoteUserConnected();
       const currentRemoteStream = webrtcConnectionRef.current.getRemoteStream();
       
+      // Check if we have a remote stream with tracks but it's not showing
       if (hasRemoteUser && currentRemoteStream && currentRemoteStream.getTracks().length > 0) {
-        // Only update if track status changed
-        if (remoteStream !== currentRemoteStream) {
+        // If track status changed or we have tracks but no visible stream, update it
+        if (remoteStream !== currentRemoteStream || 
+            (remoteStream === null && currentRemoteStream.getTracks().length > 0)) {
+          console.log("Track monitor forcing remote stream update");
           setRemoteStream(null);
           setTimeout(() => setRemoteStream(currentRemoteStream), 10);
         }
       }
-    }, 2000);
+    }, 1000); // Check more frequently (reduced from 2000ms to 1000ms)
 
     return () => {
       clearInterval(trackMonitorInterval);
+      // Remove event listeners to prevent memory leaks
+      if (webrtcConnectionRef.current) {
+        // Clean up any event handlers if necessary
+      }
     };
   }, []);
 

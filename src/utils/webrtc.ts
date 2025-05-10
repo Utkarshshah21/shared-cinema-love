@@ -1,3 +1,4 @@
+
 // A simple implementation of WebRTC peer connection
 import { toast } from "@/components/ui/use-toast";
 
@@ -81,12 +82,14 @@ export class WebRTCConnection {
   private remoteDisplayName: string | null = null;
   private onRemoteUserStatusChangeCallback: ((status: { isCameraOn: boolean, isMicOn: boolean, isScreenSharing: boolean, displayName: string, userId: string }) => void) | null = null;
   private onConnectionStateChangeCallback: ((state: string) => void) | null = null;
+  private onRemoteStreamUpdateCallback: ((stream: MediaStream) => void) | null = null;
   private lastActivity: number = Date.now();
   private presenceCheckInterval: number | null = null;
-  private activeRemoteUsers: Set<string> = new Set();
+  private activeRemoteUsers: Map<string, number> = new Map(); // Map of userId to last activity timestamp
   private iceRetryCount: number = 0;
-  private maxIceRetries: number = 3;
+  private maxIceRetries: number = 5; // Increased from 3
   private useBackupSignaling: boolean = false;
+  private pendingIceCandidates: Map<string, RTCIceCandidateInit[]> = new Map(); // Store candidates by sender until SDP exchange is done
 
   constructor(
     userId: string,
@@ -187,6 +190,17 @@ export class WebRTCConnection {
           console.log("Connection established, no longer using backup signaling");
           this.useBackupSignaling = false;
         }
+        
+        // If there are any pending ICE candidates, try applying them now
+        if (this.pendingIceCandidates.has(this.remotePeerId || '')) {
+          const candidates = this.pendingIceCandidates.get(this.remotePeerId || '') || [];
+          console.log(`Applying ${candidates.length} pending ICE candidates`);
+          candidates.forEach(candidate => {
+            this.peerConnection?.addIceCandidate(new RTCIceCandidate(candidate))
+              .catch(e => console.warn("Failed to add pending ICE candidate:", e));
+          });
+          this.pendingIceCandidates.delete(this.remotePeerId || '');
+        }
       }
     };
 
@@ -213,21 +227,34 @@ export class WebRTCConnection {
     // Add tracks from remote peer to the remote stream
     this.peerConnection.ontrack = (event) => {
       console.log("Track received:", event.track.kind);
+      // Remove any existing tracks of the same kind to avoid duplicates
+      const existingTracks = this.remoteStream.getTracks().filter(t => t.kind === event.track.kind);
+      existingTracks.forEach(track => {
+        this.remoteStream.removeTrack(track);
+      });
+      
+      // Add the new track
       this.remoteStream.addTrack(event.track);
+      
+      // Notify subscribers
+      if (this.onRemoteStreamUpdateCallback) {
+        this.onRemoteStreamUpdateCallback(this.remoteStream);
+      }
+      
       this.hasRemoteUser = true;
       this.lastActivity = Date.now();
       
       // Add to active users
       if (this.remotePeerId) {
-        this.activeRemoteUsers.add(this.remotePeerId);
+        this.activeRemoteUsers.set(this.remotePeerId, Date.now());
       }
       
       // Update remote user status
       if (this.onRemoteUserStatusChangeCallback) {
         this.onRemoteUserStatusChangeCallback({
-          isCameraOn: event.track.kind === 'video',
-          isMicOn: event.track.kind === 'audio',
-          isScreenSharing: false,
+          isCameraOn: this.remoteStream.getVideoTracks().length > 0,
+          isMicOn: this.remoteStream.getAudioTracks().length > 0,
+          isScreenSharing: this.remoteStream.getVideoTracks().some(track => track.label.includes('screen')),
           displayName: this.remoteDisplayName || "Remote User",
           userId: this.remotePeerId || ""
         });
@@ -245,6 +272,11 @@ export class WebRTCConnection {
       console.log("Negotiation needed event triggered");
       this.createOffer();
     };
+  }
+
+  // Register callback for remote stream updates
+  public onRemoteStreamUpdate(callback: (stream: MediaStream) => void) {
+    this.onRemoteStreamUpdateCallback = callback;
   }
 
   // Refresh ICE servers - can be called periodically to get fresh TURN credentials
@@ -279,11 +311,18 @@ export class WebRTCConnection {
       
       // Check for stale connections (users who haven't sent updates in a while)
       const now = Date.now();
-      if (now - this.lastActivity > 10000 && this.hasRemoteUser) {
-        console.log("Remote user appears inactive, checking connection");
-        if (this.peerConnection && (this.peerConnection.connectionState === "disconnected" || 
-            this.peerConnection.connectionState === "failed")) {
-          this.attemptReconnect();
+      
+      // Clean up stale users
+      for (const [userId, lastSeen] of this.activeRemoteUsers.entries()) {
+        if (now - lastSeen > 15000) { // 15 seconds without updates
+          console.log(`User ${userId} appears inactive, removing from active users`);
+          this.activeRemoteUsers.delete(userId);
+          
+          // If this was our remote peer, try to reconnect
+          if (userId === this.remotePeerId && this.hasRemoteUser) {
+            this.hasRemoteUser = false;
+            this.attemptReconnect();
+          }
         }
       }
     }, 1500);
@@ -299,6 +338,39 @@ export class WebRTCConnection {
     this.onConnectionStateChangeCallback = callback;
   }
 
+  // Handle participant leaving
+  public handleParticipantLeft(participantId: string) {
+    if (participantId === this.remotePeerId) {
+      console.log(`Remote peer ${participantId} has left`);
+      this.remotePeerId = null;
+      this.remoteDisplayName = null;
+      this.hasRemoteUser = false;
+      
+      // Clear all remote tracks
+      const tracks = this.remoteStream.getTracks();
+      tracks.forEach(track => {
+        this.remoteStream.removeTrack(track);
+        track.stop();
+      });
+      
+      // Notify stream update
+      if (this.onRemoteStreamUpdateCallback) {
+        this.onRemoteStreamUpdateCallback(this.remoteStream);
+      }
+    }
+    
+    // Remove from active users
+    this.activeRemoteUsers.delete(participantId);
+  }
+
+  // Handle renegotiation request (e.g., for screen sharing changes)
+  public handleRenegotiationRequest(senderId: string) {
+    if (senderId === this.remotePeerId) {
+      console.log("Renegotiation requested, creating new offer");
+      this.createOffer();
+    }
+  }
+
   // Helper to attempt reconnection
   private attemptReconnect() {
     if (this.reconnectTimer !== null) {
@@ -311,6 +383,7 @@ export class WebRTCConnection {
       if (this.peerConnection) {
         try {
           this.peerConnection.restartIce();
+          this.createOffer();
         } catch (e) {
           console.error("Failed to restart ICE, recreating connection", e);
           this.close();
@@ -319,6 +392,9 @@ export class WebRTCConnection {
           if (this.localStream) {
             this.setLocalStream(this.localStream);
           }
+          
+          // Create a new offer after a short delay
+          setTimeout(() => this.createOffer(), 500);
         }
       } else {
         this.initialize();
@@ -337,12 +413,9 @@ export class WebRTCConnection {
           userId: this.userId,
           isCameraOn: this.localStream ? this.localStream.getVideoTracks().length > 0 : false,
           isMicOn: this.localStream ? this.localStream.getAudioTracks().length > 0 : false,
-          isScreenSharing: false
+          isScreenSharing: this.localStream ? this.localStream.getVideoTracks().some(track => track.label.includes('screen')) : false
         }
       });
-      
-      // Create a new offer
-      this.createOffer();
     }, 1000);
   }
 
@@ -366,6 +439,18 @@ export class WebRTCConnection {
       
       // Send status update
       this.sendStatusUpdate();
+      
+      // Trigger renegotiation if we're already connected
+      if (this.hasRemoteUser) {
+        this.signalingCallback({
+          type: "renegotiate",
+          sender: this.userId,
+          metadata: {
+            displayName: this.displayName,
+            userId: this.userId,
+          }
+        });
+      }
     }
   }
 
@@ -375,10 +460,26 @@ export class WebRTCConnection {
       if (!this.peerConnection) return;
 
       console.log("Creating offer...");
-      const offer = await this.peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
+      
+      // Add bandwidth constraints to improve quality
+      const offerOptions: RTCOfferOptions = { 
+        offerToReceiveAudio: true, 
+        offerToReceiveVideo: true,
+      };
+      
+      const offer = await this.peerConnection.createOffer(offerOptions);
+      
+      // Set SDP bitrate constraints for better performance
+      let sdp = offer.sdp;
+      if (sdp) {
+        // Set video bitrate to high quality (2500kbps)
+        sdp = this.setMediaBitrate(sdp, 'video', 2500);
+        // Set audio bitrate (64kbps)
+        sdp = this.setMediaBitrate(sdp, 'audio', 64);
+        
+        // Create modified offer
+        offer.sdp = sdp;
+      }
       
       console.log("Setting local description...");
       await this.peerConnection.setLocalDescription(offer);
@@ -393,7 +494,7 @@ export class WebRTCConnection {
           userId: this.userId,
           isCameraOn: this.localStream ? this.localStream.getVideoTracks().length > 0 : false,
           isMicOn: this.localStream ? this.localStream.getAudioTracks().length > 0 : false,
-          isScreenSharing: false
+          isScreenSharing: this.localStream ? this.localStream.getVideoTracks().some(track => track.label.includes('screen')) : false
         }
       });
     } catch (error) {
@@ -409,6 +510,55 @@ export class WebRTCConnection {
         this.createOffer();
       }, 2000);
     }
+  }
+  
+  // Helper function to set SDP bitrate
+  private setMediaBitrate(sdp: string, media: 'audio' | 'video', bitrate: number): string {
+    const lines = sdp.split('\n');
+    let line = -1;
+    
+    // Find the media section
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('m=' + media)) {
+        line = i;
+        break;
+      }
+    }
+    
+    if (line === -1) {
+      return sdp; // Media type not found
+    }
+    
+    // Find the next m-line if any
+    let nextMLine = -1;
+    for (let i = line + 1; i < lines.length; i++) {
+      if (lines[i].startsWith('m=')) {
+        nextMLine = i;
+        break;
+      }
+    }
+    
+    // If we have an m-line but not the next one, process until the end
+    if (nextMLine === -1) {
+      nextMLine = lines.length;
+    }
+    
+    // Check if there's already a b-line
+    let hasBLine = false;
+    for (let i = line + 1; i < nextMLine; i++) {
+      if (lines[i].startsWith('b=AS:')) {
+        lines[i] = 'b=AS:' + bitrate;
+        hasBLine = true;
+        break;
+      }
+    }
+    
+    // If there's no b-line, add it after the media line
+    if (!hasBLine) {
+      lines.splice(line + 1, 0, 'b=AS:' + bitrate);
+    }
+    
+    return lines.join('\n');
   }
 
   // Send a status update to remote peer
@@ -437,7 +587,7 @@ export class WebRTCConnection {
       this.remotePeerId = sender;
       this.remoteDisplayName = metadata?.displayName || "Remote User";
       this.lastActivity = Date.now();
-      this.activeRemoteUsers.add(sender);
+      this.activeRemoteUsers.set(sender, Date.now());
       
       if (this.onRemoteUserStatusChangeCallback && metadata) {
         this.onRemoteUserStatusChangeCallback({
@@ -470,6 +620,18 @@ export class WebRTCConnection {
       console.log("Creating answer...");
       const answer = await this.peerConnection.createAnswer();
       
+      // Set SDP bitrate constraints for better performance
+      let sdp = answer.sdp;
+      if (sdp) {
+        // Set video bitrate to high quality (2500kbps)
+        sdp = this.setMediaBitrate(sdp, 'video', 2500);
+        // Set audio bitrate (64kbps)
+        sdp = this.setMediaBitrate(sdp, 'audio', 64);
+        
+        // Create modified answer
+        answer.sdp = sdp;
+      }
+      
       console.log("Setting local description from answer...");
       await this.peerConnection.setLocalDescription(answer);
       
@@ -484,7 +646,7 @@ export class WebRTCConnection {
           userId: this.userId,
           isCameraOn: this.localStream ? this.localStream.getVideoTracks().length > 0 : false,
           isMicOn: this.localStream ? this.localStream.getAudioTracks().length > 0 : false,
-          isScreenSharing: false
+          isScreenSharing: this.localStream ? this.localStream.getVideoTracks().some(track => track.label.includes('screen')) : false
         }
       });
       
@@ -494,6 +656,17 @@ export class WebRTCConnection {
       });
       
       this.hasRemoteUser = true;
+      
+      // Apply any pending ICE candidates now that we've set remote description
+      const pendingCandidates = this.pendingIceCandidates.get(sender);
+      if (pendingCandidates && pendingCandidates.length > 0) {
+        console.log(`Applying ${pendingCandidates.length} pending ICE candidates from ${sender}`);
+        for (const candidate of pendingCandidates) {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
+            .catch(e => console.warn("Failed to add pending ICE candidate:", e));
+        }
+        this.pendingIceCandidates.delete(sender);
+      }
     } catch (error) {
       console.error("Error handling offer:", error);
       toast({
@@ -523,7 +696,7 @@ export class WebRTCConnection {
       this.remotePeerId = sender;
       this.remoteDisplayName = metadata?.displayName || "Remote User";
       this.lastActivity = Date.now();
-      this.activeRemoteUsers.add(sender);
+      this.activeRemoteUsers.set(sender, Date.now());
       
       if (this.onRemoteUserStatusChangeCallback && metadata) {
         this.onRemoteUserStatusChangeCallback({
@@ -537,6 +710,17 @@ export class WebRTCConnection {
       
       console.log("Connection should be establishing now...");
       this.hasRemoteUser = true;
+      
+      // Apply any pending ICE candidates now that we've set remote description
+      const pendingCandidates = this.pendingIceCandidates.get(sender);
+      if (pendingCandidates && pendingCandidates.length > 0) {
+        console.log(`Applying ${pendingCandidates.length} pending ICE candidates from ${sender}`);
+        for (const candidate of pendingCandidates) {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
+            .catch(e => console.warn("Failed to add pending ICE candidate:", e));
+        }
+        this.pendingIceCandidates.delete(sender);
+      }
     } catch (error) {
       console.error("Error handling answer:", error);
       toast({
@@ -555,28 +739,52 @@ export class WebRTCConnection {
   }
 
   // Handle ICE candidates from other peers
-  async handleIceCandidate(candidate: RTCIceCandidateInit) {
+  async handleIceCandidate(candidate: RTCIceCandidateInit, sender: string) {
     try {
       if (!this.peerConnection) return;
+      
+      // Update activity timestamp for this user
+      this.activeRemoteUsers.set(sender, Date.now());
+      
+      // Store the candidate if we don't yet have a remote description
+      if (this.peerConnection.remoteDescription === null) {
+        console.log("Received ICE candidate before remote description, storing for later");
+        if (!this.pendingIceCandidates.has(sender)) {
+          this.pendingIceCandidates.set(sender, []);
+        }
+        this.pendingIceCandidates.get(sender)?.push(candidate);
+        return;
+      }
       
       console.log("Adding ICE candidate...");
       await this.peerConnection.addIceCandidate(
         new RTCIceCandidate(candidate)
-      );
+      ).catch(e => {
+        console.warn("Failed to add ICE candidate immediately, will retry:", e);
+        // Store for retry later
+        if (!this.pendingIceCandidates.has(sender)) {
+          this.pendingIceCandidates.set(sender, []);
+        }
+        this.pendingIceCandidates.get(sender)?.push(candidate);
+      });
     } catch (error) {
       console.error("Error adding ICE candidate:", error);
-      // Most ICE candidate errors don't need user notification
+      // Most ICE candidate errors don't need user notification, but we'll store it for retry
+      if (!this.pendingIceCandidates.has(sender)) {
+        this.pendingIceCandidates.set(sender, []);
+      }
+      this.pendingIceCandidates.get(sender)?.push(candidate);
     }
   }
 
   // Handle presence messages from other peers
   handlePresence(senderId: string, metadata?: any) {
-    // Update last activity time
+    // Update last activity time and store in active users
     this.lastActivity = Date.now();
     
     // Add to active users
     if (senderId !== this.userId) {
-      this.activeRemoteUsers.add(senderId);
+      this.activeRemoteUsers.set(senderId, Date.now());
       
       // If we receive a presence message from a user we're not connected to yet,
       // update UI to show them as available
@@ -592,9 +800,11 @@ export class WebRTCConnection {
     }
     
     // If we receive a presence message and we're not connected yet, send an offer
+    // Only the peer with the "lower" ID will initiate to avoid simultaneous offers
     if ((this.connectionState === "new" || this.connectionState === "connecting") && 
-        senderId !== this.userId) {
-      console.log("Received presence from peer, creating offer...");
+        senderId !== this.userId && 
+        this.shouldInitiateConnection(senderId)) {
+      console.log(`Received presence from peer (${senderId}), creating offer as initiator`);
       
       // Save remote peer info
       if (metadata) {
@@ -615,6 +825,12 @@ export class WebRTCConnection {
       this.createOffer();
     }
   }
+  
+  // Determine which peer should initiate the connection
+  // Use consistent logic to avoid both peers trying to initiate simultaneously
+  private shouldInitiateConnection(peerId: string): boolean {
+    return this.userId < peerId; // Lexicographically lower ID initiates
+  }
 
   // Handle status updates from other peers
   handleStatusUpdate(senderId: string, metadata?: any) {
@@ -623,7 +839,7 @@ export class WebRTCConnection {
     
     // Add to active users
     if (senderId !== this.userId) {
-      this.activeRemoteUsers.add(senderId);
+      this.activeRemoteUsers.set(senderId, Date.now());
     }
     
     if (senderId === this.remotePeerId && metadata && this.onRemoteUserStatusChangeCallback) {
@@ -664,7 +880,7 @@ export class WebRTCConnection {
   
   // Get all active remote users
   getActiveRemoteUsers() {
-    return Array.from(this.activeRemoteUsers);
+    return Array.from(this.activeRemoteUsers.keys());
   }
   
   // Update display name
@@ -699,6 +915,8 @@ export class WebRTCConnection {
     this.connectionState = "new";
     this.remotePeerId = null;
     this.remoteDisplayName = null;
+    this.pendingIceCandidates.clear();
+    this.activeRemoteUsers.clear();
   }
 }
 
@@ -943,6 +1161,11 @@ export class SignalingService {
               console.log(`Received signal via sessionStorage: ${msg.type} from ${msg.sender}`);
               this.callback(msg);
               this.lastHeartbeat = Math.max(this.lastHeartbeat, msg.timestamp);
+              
+              // Update participant cache for presence messages
+              if ((msg.type === "presence" || msg.type === "status-update") && msg.sender) {
+                this.participantCache.set(msg.sender, Date.now());
+              }
             }
           }
         } catch (e) {

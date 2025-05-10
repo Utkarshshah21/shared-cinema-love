@@ -57,7 +57,7 @@ export function useSignalingHandler(
           break;
         case 'ice-candidate':
           if (data.candidate) {
-            webrtcConnectionRef.current.handleIceCandidate(data.candidate);
+            webrtcConnectionRef.current.handleIceCandidate(data.candidate, data.sender);
           }
           break;
         case 'presence':
@@ -77,6 +77,14 @@ export function useSignalingHandler(
           if (data.sender !== userId) {
             console.log(`Participant left: ${data.sender}`);
             removeParticipant(data.sender);
+            webrtcConnectionRef.current.handleParticipantLeft(data.sender);
+          }
+          break;
+        case 'renegotiate':
+          // Handle renegotiation requests (important for screen sharing)
+          if (data.sender !== userId) {
+            console.log(`Renegotiation requested by: ${data.sender}`);
+            webrtcConnectionRef.current.handleRenegotiationRequest(data.sender);
           }
           break;
         default:

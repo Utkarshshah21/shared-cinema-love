@@ -1,5 +1,5 @@
 
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '@/components/ui/use-toast';
 import { WebRTCConnection, SignalingService } from '@/utils/webrtc';
@@ -15,7 +15,6 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   
   // Generate a random user ID for this session that persists across refreshes
   const userId = useRef<string>(
-    // Initialize with existing ID from sessionStorage or create a new one
     (() => {
       // Try to get existing userId from sessionStorage
       const existingId = sessionStorage.getItem(`webrtc_user_id_${roomId}`);
@@ -79,17 +78,39 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
 
   // Monitor connection state for debugging
   const [connectionStateLog, setConnectionStateLog] = useState<string[]>([]);
+  const [connectionState, setConnectionState] = useState<string>("new");
   
-  // Log connection state changes
+  // Periodically attempt reconnection if needed
   useEffect(() => {
-    if (webrtcConnection.current) {
-      const logState = (state: string) => {
-        console.log(`WebRTC connection state: ${state}`);
-        setConnectionStateLog(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${state}`]);
-      };
-      
-      webrtcConnection.current.onConnectionStateChange(logState);
+    let reconnectInterval: number | null = null;
+    
+    if (connectionState === "failed" || connectionState === "disconnected") {
+      reconnectInterval = window.setInterval(() => {
+        console.log("Periodic reconnection attempt...");
+        if (webrtcConnection.current) {
+          webrtcConnection.current.refreshIceServers();
+          webrtcConnection.current.createOffer();
+        }
+      }, 5000);
     }
+    
+    return () => {
+      if (reconnectInterval !== null) {
+        window.clearInterval(reconnectInterval);
+      }
+    };
+  }, [connectionState]);
+
+  // Log connection state changes
+  const handleConnectionStateChange = useCallback((state: string) => {
+    console.log(`WebRTC connection state: ${state}`);
+    setConnectionState(state);
+    setConnectionStateLog(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${state}`]);
+  }, []);
+  
+  // Create signaling callback
+  const sendSignalingMessage = useCallback((data: any) => {
+    signalingService.current?.send(data);
   }, []);
 
   // Signaling handler
@@ -98,30 +119,12 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     updateRemoteParticipantsList, 
     removeParticipant, 
     userId,
-    webrtcConnection.current?.getConnectionState() || "new"
+    connectionState
   );
-  
-  // Connection manager
-  const { isConnected, hasRemoteUser, connectionState, remoteParticipant } = 
-    useConnectionManager(
-      webrtcConnection, 
-      signalingService, 
-      userId, 
-      userDisplayName, 
-      roomId, 
-      isCameraOn, 
-      isMicOn, 
-      isScreenSharing
-    );
   
   // Initialize WebRTC and signaling on first render
   useEffect(() => {
-    if (!webrtcConnection.current) {
-      // Set up signaling callback
-      const sendSignalingMessage = (data: any) => {
-        signalingService.current?.send(data);
-      };
-
+    if (!webrtcConnection.current && roomId && userId) {
       // Create WebRTC connection
       webrtcConnection.current = new WebRTCConnection(
         userId,
@@ -129,6 +132,9 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
         userDisplayName,
         sendSignalingMessage
       );
+      
+      // Register connection state change handler
+      webrtcConnection.current.onConnectionStateChange(handleConnectionStateChange);
       
       // Create signaling service
       signalingService.current = new SignalingService(
@@ -141,7 +147,13 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
       // Log connection info for debugging
       console.log(`WebRTC initialized - Room: ${roomId}, User: ${userId}, Name: ${userDisplayName}`);
       
-      // Ensure clean disconnection when navigating away
+      // Force a regular refresh of STUN/TURN servers
+      const refreshIceServersInterval = setInterval(() => {
+        if (webrtcConnection.current && webrtcConnection.current.refreshIceServers) {
+          webrtcConnection.current.refreshIceServers();
+        }
+      }, 30000); // every 30 seconds
+      
       const cleanupHandler = () => {
         if (signalingService.current) {
           signalingService.current.stop();
@@ -153,12 +165,12 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
       
       window.addEventListener('beforeunload', cleanupHandler);
       
-      // Force a regular refresh of STUN/TURN servers
-      const refreshIceServersInterval = setInterval(() => {
-        if (webrtcConnection.current && webrtcConnection.current.refreshIceServers) {
-          webrtcConnection.current.refreshIceServers();
+      // Create initial offer after a brief delay to allow signaling setup
+      setTimeout(() => {
+        if (webrtcConnection.current) {
+          webrtcConnection.current.createOffer();
         }
-      }, 30000); // every 30 seconds
+      }, 1000);
       
       return () => {
         window.removeEventListener('beforeunload', cleanupHandler);
@@ -166,7 +178,21 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
         cleanupHandler();
       };
     }
-  }, [roomId, userId, userDisplayName, handleSignalingMessage]);
+  }, [roomId, userId, userDisplayName, handleSignalingMessage, handleConnectionStateChange, sendSignalingMessage]);
+  
+  // Connection manager
+  const { isConnected, hasRemoteUser, remoteParticipant } = 
+    useConnectionManager(
+      webrtcConnection, 
+      signalingService, 
+      userId, 
+      userDisplayName, 
+      roomId, 
+      isCameraOn, 
+      isMicOn, 
+      isScreenSharing,
+      connectionState
+    );
   
   // Debug information for connection troubleshooting
   const debugInfo = {
@@ -175,7 +201,9 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     connectionState,
     remoteParticipantsCount: remoteParticipants.length,
     hasRemoteUser,
-    connectionStateLog
+    connectionStateLog,
+    localStreamTracks: localStream ? localStream.getTracks().map(t => t.kind).join(', ') : 'none',
+    remoteStreamTracks: remoteStream ? remoteStream.getTracks().map(t => t.kind).join(', ') : 'none'
   };
   
   return {

@@ -11,11 +11,11 @@ export function useConnectionManager(
   roomId: string,
   isCameraOn: boolean,
   isMicOn: boolean,
-  isScreenSharing: boolean
+  isScreenSharing: boolean,
+  connectionState: string
 ) {
   const [isConnected, setIsConnected] = useState(false);
   const [hasRemoteUser, setHasRemoteUser] = useState(false);
-  const [connectionState, setConnectionState] = useState<string>("new");
   const [remoteParticipant, setRemoteParticipant] = useState<RemoteParticipant | null>(null);
   const { toast } = useToast();
 
@@ -35,20 +35,8 @@ export function useConnectionManager(
         joinedAt: Date.now()
       });
       setHasRemoteUser(true);
-    });
-
-    webrtcConnection.current.onConnectionStateChange((state: string) => {
-      setConnectionState(state);
       
-      if (state === 'connected' || state === 'completed') {
-        setIsConnected(true);
-      } else {
-        setIsConnected(state === 'connecting');
-      }
-
-      if (remoteParticipant) {
-        setRemoteParticipant({...remoteParticipant, connectionState: state});
-      }
+      console.log(`Remote user status updated: ${status.displayName} (${status.userId})`, status);
     });
 
     // Send an initial presence message
@@ -65,16 +53,6 @@ export function useConnectionManager(
         }
       });
     }, 500);
-
-    // Attempt to connect after a short delay
-    const connectTimer = setTimeout(() => {
-      webrtcConnection.current?.createOffer();
-      setIsConnected(true);
-      toast({
-        title: "Connected to room",
-        description: "You've successfully connected to room " + roomId,
-      });
-    }, 1000);
 
     // Set up a heartbeat to detect disconnected users
     const heartbeatInterval = setInterval(() => {
@@ -104,11 +82,21 @@ export function useConnectionManager(
     window.addEventListener('beforeunload', handleUnload);
 
     return () => {
-      clearTimeout(connectTimer);
       clearInterval(heartbeatInterval);
       window.removeEventListener('beforeunload', handleUnload);
     };
   }, [roomId, userId, userDisplayName, toast, connectionState, isCameraOn, isMicOn, isScreenSharing]);
+
+  // Update connection status based on connection state
+  useEffect(() => {
+    if (connectionState === 'connected' || connectionState === 'completed') {
+      setIsConnected(true);
+    } else if (connectionState === 'connecting' || connectionState === 'new') {
+      setIsConnected(true); // Still show as connected during connection process for better UX
+    } else {
+      setIsConnected(false);
+    }
+  }, [connectionState]);
 
   // Monitor connection status and remote stream
   useEffect(() => {
@@ -121,20 +109,16 @@ export function useConnectionManager(
         const hasRemoteUser = webrtcConnection.current.hasRemoteUserConnected();
         setHasRemoteUser(hasRemoteUser);
         
-        // Update connection state
-        const connectionState = webrtcConnection.current.getConnectionState();
-        setIsConnected(connectionState === 'connected' || connectionState === 'completed');
-        
         // If we have a remote user but no participant info, try to get it
         if (hasRemoteUser && !remoteParticipant && webrtcConnection.current.getRemoteUserId()) {
           const remoteMediaStream = webrtcConnection.current.getRemoteStream();
           setRemoteParticipant({
             userId: webrtcConnection.current.getRemoteUserId() || "",
-            displayName: webrtcConnection.current.getRemoteDisplayName(),
-            isCameraOn: remoteMediaStream?.getVideoTracks().length > 0,
-            isMicOn: remoteMediaStream?.getAudioTracks().length > 0,
+            displayName: webrtcConnection.current.getRemoteDisplayName() || "Remote User",
+            isCameraOn: remoteMediaStream?.getVideoTracks().length > 0 || false,
+            isMicOn: remoteMediaStream?.getAudioTracks().length > 0 || false,
             isScreenSharing: false,
-            connectionState: connectionState,
+            connectionState: webrtcConnection.current.getConnectionState() || "new",
             joinedAt: Date.now()
           });
         }
@@ -143,6 +127,9 @@ export function useConnectionManager(
         const activeUsers = webrtcConnection.current.getActiveRemoteUsers();
         if (activeUsers && activeUsers.length > 0) {
           setHasRemoteUser(true);
+          
+          // Log active users for debugging
+          console.log("Active remote users:", activeUsers);
         }
       }
     }, 1000);
@@ -150,12 +137,11 @@ export function useConnectionManager(
     return () => {
       clearInterval(statusCheckInterval);
     };
-  }, [isConnected, remoteParticipant]);
+  }, [remoteParticipant]);
 
   return {
     isConnected,
     hasRemoteUser,
-    connectionState,
     remoteParticipant
   };
 }

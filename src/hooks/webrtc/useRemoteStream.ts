@@ -8,18 +8,34 @@ export function useRemoteStream(webrtcConnectionRef: React.MutableRefObject<any>
   useEffect(() => {
     if (!webrtcConnectionRef.current) return;
     
+    // Initial setup
     const remoteMediaStream = webrtcConnectionRef.current.getRemoteStream();
     setRemoteStream(remoteMediaStream);
-
-    // Force a re-render of the remote stream if tracks are added
+    
+    // Register callback to be notified when remote tracks change
+    const handleRemoteStreamUpdate = (updatedStream: MediaStream) => {
+      console.log("Remote stream updated:", 
+        updatedStream ? `Video tracks: ${updatedStream.getVideoTracks().length}, Audio tracks: ${updatedStream.getAudioTracks().length}` : "No stream");
+      
+      setRemoteStream(null); // Force a re-render
+      setTimeout(() => setRemoteStream(updatedStream), 10);
+    };
+    
+    webrtcConnectionRef.current.onRemoteStreamUpdate(handleRemoteStreamUpdate);
+    
+    // Force a re-render of the remote stream periodically to ensure it's displayed
     const trackMonitorInterval = setInterval(() => {
       const hasRemoteUser = webrtcConnectionRef.current.hasRemoteUserConnected();
+      const currentRemoteStream = webrtcConnectionRef.current.getRemoteStream();
       
-      if (hasRemoteUser && remoteMediaStream.getTracks().length > 0) {
-        setRemoteStream(null);
-        setTimeout(() => setRemoteStream(remoteMediaStream), 10);
+      if (hasRemoteUser && currentRemoteStream && currentRemoteStream.getTracks().length > 0) {
+        // Only update if track status changed
+        if (remoteStream !== currentRemoteStream) {
+          setRemoteStream(null);
+          setTimeout(() => setRemoteStream(currentRemoteStream), 10);
+        }
       }
-    }, 1000);
+    }, 2000);
 
     return () => {
       clearInterval(trackMonitorInterval);

@@ -17,10 +17,10 @@ export function useParticipantTracking() {
       
       const updatedParticipant = {
         userId: senderId,
-        displayName: metadata.displayName || "User " + senderId.slice(0, 4),
-        isCameraOn: metadata.isCameraOn || false,
-        isMicOn: metadata.isMicOn || false, 
-        isScreenSharing: metadata.isScreenSharing || false,
+        displayName: metadata?.displayName || "User " + senderId.slice(0, 4),
+        isCameraOn: metadata?.isCameraOn || false,
+        isMicOn: metadata?.isMicOn || false, 
+        isScreenSharing: metadata?.isScreenSharing || false,
         connectionState: connectionState,
         joinedAt: Date.now()
       };
@@ -38,10 +38,10 @@ export function useParticipantTracking() {
       // Otherwise, add as new participant
       toast({
         title: "New participant joined",
-        description: `${metadata.displayName || "A user"} has joined the room`,
+        description: `${metadata?.displayName || "A user"} has joined the room`,
       });
       
-      console.log(`Adding new participant: ${senderId} - ${metadata.displayName}`);
+      console.log(`Adding new participant: ${senderId} - ${metadata?.displayName}`);
       return [...prev, updatedParticipant];
     });
   };
@@ -68,16 +68,16 @@ export function useParticipantTracking() {
     const staleCheckInterval = setInterval(() => {
       const now = Date.now();
       setRemoteParticipants(prev => {
-        // Filter out participants who haven't updated in the last 12 seconds
+        // Filter out participants who haven't updated in the last 30 seconds (increased from 12s)
         return prev.filter(participant => {
-          const isStale = now - participant.joinedAt > 12000;
+          const isStale = now - participant.joinedAt > 30000;
           if (isStale) {
             console.log(`Removing stale participant: ${participant.userId}`);
           }
           return !isStale;
         });
       });
-    }, 5000);
+    }, 10000); // Check less frequently (increased from 5000ms)
     
     return () => clearInterval(staleCheckInterval);
   }, []);

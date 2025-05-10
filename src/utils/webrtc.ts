@@ -937,4 +937,74 @@ export class SignalingService {
         try {
           const sessionKey = `${this.storageKey}_latest`;
           const latestMsg = sessionStorage.getItem(sessionKey);
+          if (latestMsg) {
+            const msg = JSON.parse(latestMsg);
+            if (msg.sender !== this.userId && msg.timestamp > this.lastHeartbeat) {
+              console.log(`Received signal via sessionStorage: ${msg.type} from ${msg.sender}`);
+              this.callback(msg);
+              this.lastHeartbeat = Math.max(this.lastHeartbeat, msg.timestamp);
+            }
+          }
+        } catch (e) {
+          console.warn("Error checking sessionStorage:", e);
         }
+      } catch (error) {
+        console.error("Error processing signaling messages:", error);
+      }
+    }, 200);
+  }
+
+  // Stop signaling and clean up
+  stop() {
+    if (this.checkInterval !== null) {
+      window.clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+    
+    if (this.presenceInterval !== null) {
+      window.clearInterval(this.presenceInterval);
+      this.presenceInterval = null;
+    }
+    
+    if (this.participantCleanupInterval !== null) {
+      window.clearInterval(this.participantCleanupInterval);
+      this.participantCleanupInterval = null;
+    }
+    
+    if (this.broadcastChannel) {
+      this.broadcastChannel.close();
+      this.broadcastChannel = null;
+    }
+    
+    // Send a leave message
+    this.send({
+      type: "participant-left",
+      sender: this.userId,
+      timestamp: Date.now()
+    });
+  }
+
+  // Static method to clean up old room data to prevent issues with stale signaling data
+  static cleanupOldRoomData(roomId: string) {
+    try {
+      // Clear localStorage for this room
+      const storageKey = `signaling_${roomId}`;
+      // Don't remove completely, just truncate to avoid erasing current messages
+      const existingData = localStorage.getItem(storageKey);
+      if (existingData) {
+        const messages = JSON.parse(existingData);
+        // Just keep the most recent messages
+        const recentMessages = messages.slice(-20); 
+        localStorage.setItem(storageKey, JSON.stringify(recentMessages));
+      }
+      
+      // Clear sessionStorage
+      const sessionKey = `${storageKey}_latest`;
+      sessionStorage.removeItem(sessionKey);
+      
+      console.log("Cleaned up old room signaling data");
+    } catch (e) {
+      console.warn("Error cleaning up old room data:", e);
+    }
+  }
+}

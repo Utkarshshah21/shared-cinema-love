@@ -14,8 +14,8 @@ export function useConnectionManager(
   isScreenSharing: boolean,
   connectionState: string
 ) {
-  const [isConnected, setIsConnected] = useState(false);
-  const [hasRemoteUser, setHasRemoteUser] = useState(false);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [hasRemoteUser, setHasRemoteUser] = useState<boolean>(false);
   const [remoteParticipant, setRemoteParticipant] = useState<RemoteParticipant | null>(null);
   const { toast } = useToast();
 
@@ -27,13 +27,13 @@ export function useConnectionManager(
     webrtcConnection.current.onRemoteUserStatusChange((status: any) => {
       setRemoteParticipant({
         userId: status.userId,
+        id: status.userId, // Set id to userId for compatibility
         displayName: status.displayName || "Remote User",
         isCameraOn: status.isCameraOn || false,
         isMicOn: status.isMicOn || false,
         isScreenSharing: status.isScreenSharing || false,
         connectionState: connectionState,
         joinedAt: Date.now(),
-        id: status.userId, // Set id to userId for compatibility
         stream: null // Initialize stream as null
       });
       setHasRemoteUser(true);
@@ -136,13 +136,13 @@ export function useConnectionManager(
           
           setRemoteParticipant({
             userId: remoteId,
+            id: remoteId, // Set id to remoteId for compatibility
             displayName: remoteName,
             isCameraOn: remoteMediaStream?.getVideoTracks().length > 0 || false,
             isMicOn: remoteMediaStream?.getAudioTracks().length > 0 || false,
             isScreenSharing: false,
             connectionState: webrtcConnection.current.getConnectionState() || "new",
             joinedAt: Date.now(),
-            id: remoteId, // Set id to remoteId for compatibility
             stream: remoteMediaStream || null // Use remoteMediaStream or null
           });
         }

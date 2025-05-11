@@ -1,16 +1,17 @@
 
 // Types for WebRTC functionality
+import { StateUpdater } from "preact/hooks";
 
 export interface RemoteParticipant {
-  userId: string;
+  userId: string;   // Unique identifier for this participant
+  id: string;       // Alias for userId to maintain compatibility
   displayName: string;
   isCameraOn: boolean;
   isMicOn: boolean;
   isScreenSharing: boolean;
   connectionState: string;
   joinedAt: number;
-  id: string;     // Added for compatibility with old code
-  stream: MediaStream | null;  // Changed to allow null for compatibility
+  stream: MediaStream | null;
 }
 
 export interface UseWebRTCReturn {
@@ -27,30 +28,31 @@ export interface UseWebRTCReturn {
   remoteParticipants: RemoteParticipant[];
   connectionState: string;
   userDisplayName: string;
-  toggleCamera: () => Promise<boolean | void>;
-  toggleMic: () => Promise<boolean | void>;
-  toggleMicrophone: () => Promise<boolean | void>; // Alias for toggleMic
+  toggleCamera: () => Promise<void>;
+  toggleMic: () => Promise<void>;
+  toggleMicrophone: () => Promise<void>; // Alias for toggleMic
   toggleScreenShare: () => Promise<void>;
   connect: () => Promise<boolean>;
   disconnect: () => void;
-  debugInfo?: {
-    userId: string;
-    roomId: string;
-    connectionState: string;
-    remoteParticipantsCount: number;
-    hasRemoteUser: boolean;
-    connectionStateLog: string[];
-    localStreamTracks?: string;
-    remoteStreamTracks?: string;
-  };
+  debugInfo?: any;
 }
 
-// Add SignalingData type for useSignalingHandler
 export interface SignalingData {
   type: string;
   sender: string;
+  receiver?: string;
   sdp?: string;
   candidate?: RTCIceCandidate;
   metadata?: any;
   timestamp?: number;
+}
+
+export interface PeerConfig {
+  roomId: string;
+  userId: string;
+  displayName: string;
+  onConnectionStateChange?: (state: string) => void;
+  onRemoteStreamUpdate?: (stream: MediaStream | null) => void;
+  onRemoteUserStatusChange?: (status: any) => void;
+  onMessage?: (data: any) => void;
 }

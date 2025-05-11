@@ -171,7 +171,7 @@ export class ZegoCloudService {
         toast({
           title: "Poor connection",
           description: "Your network connection quality is degraded",
-          variant: "warning"
+          variant: "destructive"
         });
       }
     });
@@ -332,7 +332,7 @@ export class ZegoCloudService {
           toast({
             title: "Limited Media Access",
             description: "Your camera couldn't be accessed. Connected with audio only.",
-            variant: "warning"
+            variant: "destructive"
           });
           
           return this.localStream;

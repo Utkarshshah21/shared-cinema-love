@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from 'react';
 import { RemoteParticipant } from './types';
 import { useToast } from '@/components/ui/use-toast';
@@ -16,13 +17,13 @@ export function useParticipantTracking() {
       
       const updatedParticipant: RemoteParticipant = {
         userId: senderId,
+        id: senderId, // Set id to senderId for compatibility
         displayName: metadata?.displayName || "User " + senderId.slice(0, 4),
         isCameraOn: metadata?.isCameraOn || false,
         isMicOn: metadata?.isMicOn || false, 
         isScreenSharing: metadata?.isScreenSharing || false,
         connectionState: connectionState,
         joinedAt: Date.now(),
-        id: senderId, // Set id to senderId for compatibility
         stream: null  // Initialize stream as null
       };
 

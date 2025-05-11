@@ -122,11 +122,11 @@ const Room = () => {
   
   // Update connection status based on state
   useEffect(() => {
-    if (connectionState === 'connected' || connectionState === 'completed') {
+    if (connectionState === 'CONNECTED' || connectionState === 'completed') {
       setConnectionStatus('connected');
-    } else if (connectionState === 'connecting' || connectionState === 'new') {
+    } else if (connectionState === 'CONNECTING' || connectionState === 'new') {
       setConnectionStatus('connecting');
-    } else if (connectionState === 'disconnected') {
+    } else if (connectionState === 'DISCONNECTED') {
       setConnectionStatus('reconnecting');
     } else {
       setConnectionStatus('failed');
@@ -590,7 +590,7 @@ const Room = () => {
               </h3>
               <p className="text-red-600 mb-2">We're having trouble establishing a connection. Try these steps:</p>
               <ol className="list-decimal pl-5 text-red-600">
-                <li>Make sure your firewall or network isn't blocking WebRTC connections</li>
+                <li>Make sure your network isn't blocking our video connection</li>
                 <li>Try using a different browser (Chrome or Firefox work best)</li>
                 <li>Refresh the page and try connecting again</li>
                 <li>Try using a mobile data connection instead of WiFi</li>

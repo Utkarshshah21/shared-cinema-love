@@ -6,13 +6,20 @@ import { useToast } from '@/components/ui/use-toast';
 
 // Configuration type for ZegoCloud
 export interface ZegoCloudConfig {
-  appID: number;
+  appID?: number;
   server?: string;
-  token: string;
+  token?: string;
   roomID: string;
   userID?: string;
   userName?: string;
 }
+
+// Default ZegoCloud credentials - these will be used if none are provided
+const DEFAULT_CREDENTIALS = {
+  appID: 1481071172,
+  appSign: '2a3a63461704e7438ee9a307f03f442e71689240e360afaa27861e7a0b96c944',
+  serverSecret: '10859fa006c38a78077b5f1e919134d1'
+};
 
 export function useZegoCloud(config: ZegoCloudConfig) {
   const { toast } = useToast();
@@ -41,14 +48,29 @@ export function useZegoCloud(config: ZegoCloudConfig) {
   // Get the ZegoCloud service instance
   const zegoService = ZegoCloudService.getInstance();
 
+  // Generate a token for the room
+  const generateToken = (appID: number, serverSecret: string, roomID: string, userID: string): string => {
+    // In a production environment, this should be done on the server side
+    // For demo purposes, we're using a static token
+    return DEFAULT_CREDENTIALS.appSign;
+  };
+
   // Initialize the ZegoCloud service when the component mounts
   useEffect(() => {
     const initializeZegoCloud = async () => {
+      const appID = config.appID || DEFAULT_CREDENTIALS.appID;
+      const token = config.token || generateToken(
+        appID,
+        DEFAULT_CREDENTIALS.serverSecret,
+        config.roomID,
+        userID
+      );
+
       const initialized = await zegoService.init({
-        appID: config.appID,
+        appID: appID,
         server: config.server || 'wss://webliveroom-test.zego.im/ws',
         roomID: config.roomID,
-        token: config.token,
+        token: token,
         user: {
           userID: userID,
           userName: userName
@@ -78,11 +100,18 @@ export function useZegoCloud(config: ZegoCloudConfig) {
     return () => {
       zegoService.destroy();
     };
-  }, [config.appID, config.roomID, config.token, userID, userName]);
+  }, [config.roomID, userID, userName]);
 
   // Connect to the room
   const connect = async () => {
-    const joined = await zegoService.joinRoom(config.token);
+    const token = config.token || generateToken(
+      config.appID || DEFAULT_CREDENTIALS.appID,
+      DEFAULT_CREDENTIALS.serverSecret,
+      config.roomID,
+      userID
+    );
+    
+    const joined = await zegoService.joinRoom(token);
     if (joined) {
       setIsConnected(true);
     }
@@ -160,6 +189,7 @@ export function useZegoCloud(config: ZegoCloudConfig) {
     disconnect,
     toggleCamera,
     toggleMic,
+    startLocalStream,
     localStream,
     remoteStreams,
     isCameraOn,

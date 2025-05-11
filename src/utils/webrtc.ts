@@ -1208,8 +1208,13 @@ export class SignalingService {
   }
 
   // Static method to clean up old room data to prevent issues with stale signaling data
-  static cleanupOldRoomData(roomId: string) {
+  static cleanupOldRoomData(roomId?: string) {
     try {
+      if (!roomId) {
+        console.warn("No roomId provided for cleanup, skipping");
+        return;
+      }
+      
       // Clear localStorage for this room
       const storageKey = `signaling_${roomId}`;
       // Don't remove completely, just truncate to avoid erasing current messages

@@ -37,9 +37,9 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
   // Clear room data on first visit (helps avoid stale signaling data)
   useEffect(() => {
     if (typeof SignalingService !== 'undefined') {
-      // Make sure we call cleanupOldRoomData with the roomId parameter
+      // Check if the cleanupOldRoomData method exists and call it without arguments
       if (SignalingService.cleanupOldRoomData) {
-        SignalingService.cleanupOldRoomData(roomId);
+        SignalingService.cleanupOldRoomData();
       }
       
       // Also clear any stale user IDs if they're too old

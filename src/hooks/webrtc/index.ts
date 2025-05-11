@@ -39,7 +39,7 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     if (typeof SignalingService !== 'undefined') {
       // Check if the cleanupOldRoomData method exists and call it without arguments
       if (SignalingService.cleanupOldRoomData) {
-        SignalingService.cleanupOldRoomData();
+        SignalingService.cleanupOldRoomData(roomId);
       }
       
       // Also clear any stale user IDs if they're too old

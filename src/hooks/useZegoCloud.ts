@@ -7,11 +7,13 @@ import { useToast } from '@/components/ui/use-toast';
 // Configuration type for ZegoCloud
 export interface ZegoCloudConfig {
   appID?: number;
+  appSign?: string;
   server?: string;
   token?: string;
   roomID: string;
   userID?: string;
   userName?: string;
+  serverSecret?: string;
 }
 
 // Default ZegoCloud credentials - these will be used if none are provided
@@ -52,7 +54,7 @@ export function useZegoCloud(config: ZegoCloudConfig) {
   const generateToken = (appID: number, serverSecret: string, roomID: string, userID: string): string => {
     // In a production environment, this should be done on the server side
     // For demo purposes, we're using a static token
-    return DEFAULT_CREDENTIALS.appSign;
+    return config.appSign || DEFAULT_CREDENTIALS.appSign;
   };
 
   // Initialize the ZegoCloud service when the component mounts
@@ -61,7 +63,7 @@ export function useZegoCloud(config: ZegoCloudConfig) {
       const appID = config.appID || DEFAULT_CREDENTIALS.appID;
       const token = config.token || generateToken(
         appID,
-        DEFAULT_CREDENTIALS.serverSecret,
+        config.serverSecret || DEFAULT_CREDENTIALS.serverSecret,
         config.roomID,
         userID
       );
@@ -106,7 +108,7 @@ export function useZegoCloud(config: ZegoCloudConfig) {
   const connect = async () => {
     const token = config.token || generateToken(
       config.appID || DEFAULT_CREDENTIALS.appID,
-      DEFAULT_CREDENTIALS.serverSecret,
+      config.serverSecret || DEFAULT_CREDENTIALS.serverSecret,
       config.roomID,
       userID
     );

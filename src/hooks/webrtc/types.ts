@@ -1,6 +1,15 @@
 
 // Types for WebRTC functionality
-import { SignalingData } from "@/utils/webrtc";
+
+// SignalingData is needed for useSignalingHandler
+export interface SignalingData {
+  type: string;
+  sender: string;
+  sdp?: string;
+  candidate?: RTCIceCandidate;
+  metadata?: any;
+  timestamp?: number;
+}
 
 export interface RemoteParticipant {
   userId: string;
@@ -10,6 +19,8 @@ export interface RemoteParticipant {
   isScreenSharing: boolean;
   connectionState: string;
   joinedAt: number;
+  id: string;     // Added for compatibility with old code
+  stream: MediaStream;  // Added for compatibility with old code
 }
 
 export interface UseWebRTCReturn {
@@ -17,16 +28,21 @@ export interface UseWebRTCReturn {
   remoteStream: MediaStream | null;
   isCameraOn: boolean;
   isMicOn: boolean;
+  isMicrophoneOn: boolean; // Alias for isMicOn
   isScreenSharing: boolean;
   isConnected: boolean;
   hasRemoteUser: boolean;
+  hasRemoteParticipants: boolean; // Alias for hasRemoteUser
   remoteParticipant: RemoteParticipant | null;
   remoteParticipants: RemoteParticipant[];
   connectionState: string;
   userDisplayName: string;
-  toggleCamera: () => Promise<void>;
-  toggleMic: () => Promise<void>;
+  toggleCamera: () => Promise<boolean | void>;
+  toggleMic: () => Promise<boolean | void>;
+  toggleMicrophone: () => Promise<boolean | void>; // Alias for toggleMic
   toggleScreenShare: () => Promise<void>;
+  connect: () => Promise<boolean>;
+  disconnect: () => void;
   debugInfo?: {
     userId: string;
     roomId: string;
@@ -34,6 +50,8 @@ export interface UseWebRTCReturn {
     remoteParticipantsCount: number;
     hasRemoteUser: boolean;
     connectionStateLog: string[];
+    localStreamTracks?: string;
+    remoteStreamTracks?: string;
   };
 }
 

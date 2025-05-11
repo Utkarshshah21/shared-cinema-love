@@ -1,6 +1,5 @@
-
 import { useRef, useEffect } from 'react';
-import { SignalingData } from '../webrtc/types';
+import { SignalingData } from './types';
 
 export function useSignalingHandler(
   webrtcConnectionRef: React.MutableRefObject<any>,

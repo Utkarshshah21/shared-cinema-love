@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { RemoteParticipant } from './types';
 import { useToast } from '@/components/ui/use-toast';
@@ -15,14 +14,16 @@ export function useParticipantTracking() {
       // Check if this participant already exists
       const existingIndex = prev.findIndex(p => p.userId === senderId);
       
-      const updatedParticipant = {
+      const updatedParticipant: RemoteParticipant = {
         userId: senderId,
         displayName: metadata?.displayName || "User " + senderId.slice(0, 4),
         isCameraOn: metadata?.isCameraOn || false,
         isMicOn: metadata?.isMicOn || false, 
         isScreenSharing: metadata?.isScreenSharing || false,
         connectionState: connectionState,
-        joinedAt: Date.now()
+        joinedAt: Date.now(),
+        id: senderId, // Set id to senderId for compatibility
+        stream: null  // Initialize stream as null
       };
 
       // If participant exists, update their info
@@ -31,6 +32,8 @@ export function useParticipantTracking() {
         updatedParticipants[existingIndex] = {
           ...updatedParticipants[existingIndex],
           ...updatedParticipant,
+          // Keep the existing stream if it exists
+          stream: updatedParticipants[existingIndex].stream || null
         };
         return updatedParticipants;
       } 

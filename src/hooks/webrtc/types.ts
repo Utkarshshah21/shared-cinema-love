@@ -10,7 +10,7 @@ export interface RemoteParticipant {
   connectionState: string;
   joinedAt: number;
   id: string;     // Added for compatibility with old code
-  stream: MediaStream;  // Added for compatibility with old code
+  stream: MediaStream | null;  // Changed to allow null for compatibility
 }
 
 export interface UseWebRTCReturn {
@@ -43,4 +43,14 @@ export interface UseWebRTCReturn {
     localStreamTracks?: string;
     remoteStreamTracks?: string;
   };
+}
+
+// Add SignalingData type for useSignalingHandler
+export interface SignalingData {
+  type: string;
+  sender: string;
+  sdp?: string;
+  candidate?: RTCIceCandidate;
+  metadata?: any;
+  timestamp?: number;
 }

@@ -1,45 +1,13 @@
 
 import { useZegoCloud } from './useZegoCloud';
 import type { RemoteParticipant } from './webrtc/types';
-
-// Define the return type for the useWebRTC hook
-export interface UseWebRTCReturn {
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
-  isCameraOn: boolean;
-  isMicOn: boolean;
-  isMicrophoneOn: boolean;
-  isScreenSharing: boolean;
-  isConnected: boolean;
-  hasRemoteUser: boolean;
-  hasRemoteParticipants: boolean;
-  remoteParticipant: RemoteParticipant | null;
-  remoteParticipants: RemoteParticipant[];
-  connectionState: string;
-  userDisplayName: string;
-  toggleCamera: () => Promise<boolean | void>;
-  toggleMic: () => Promise<boolean | void>;
-  toggleMicrophone: () => Promise<boolean | void>;
-  toggleScreenShare: () => Promise<void>;
-  connect: () => Promise<boolean>;
-  disconnect: () => void;
-  debugInfo?: {
-    userId: string;
-    roomId: string;
-    connectionState: string;
-    remoteParticipantsCount: number;
-    hasRemoteUser: boolean;
-    connectionStateLog: string[];
-    localStreamTracks?: string;
-    remoteStreamTracks?: string;
-  };
-}
+import { useState, useEffect } from 'react';
 
 // Re-export types
 export type { RemoteParticipant };
 
 // useWebRTC hook that internally uses ZegoCloud
-export function useWebRTC(roomId: string, displayName: string = "User"): UseWebRTCReturn {
+export function useWebRTC(roomId: string, displayName: string = "User") {
   // Use the ZegoCloud service
   const {
     localStream,
@@ -61,6 +29,9 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     userName: displayName
   });
 
+  // State for screen sharing
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  
   // Create a single remoteStream from the first available remoteStream
   const remoteStream = remoteStreams.size > 0 
     ? Array.from(remoteStreams.values())[0] 
@@ -100,10 +71,24 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
       : 'No remote stream'
   };
 
-  // Screen sharing is not directly supported in our ZegoCloud wrapper,
-  // so we'll provide a stub implementation
+  // Screen sharing implementation
   const toggleScreenShare = async (): Promise<void> => {
-    console.log("Screen sharing not implemented in ZegoCloud wrapper");
+    try {
+      if (!isScreenSharing) {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        // Handle screen sharing ended by user
+        screenStream.getVideoTracks()[0].onended = () => {
+          setIsScreenSharing(false);
+        };
+        setIsScreenSharing(true);
+      } else {
+        setIsScreenSharing(false);
+      }
+    } catch (error) {
+      console.error("Error toggling screen share:", error);
+      setIsScreenSharing(false);
+    }
+    
     return Promise.resolve();
   };
 
@@ -114,7 +99,7 @@ export function useWebRTC(roomId: string, displayName: string = "User"): UseWebR
     isCameraOn,
     isMicOn,
     isMicrophoneOn: isMicOn, // Alias for isMicOn
-    isScreenSharing: false, // Not tracking separately in ZegoCloud
+    isScreenSharing,
     isConnected,
     hasRemoteUser: hasRemoteUsers,
     hasRemoteParticipants: hasRemoteUsers, // Alias for hasRemoteUser

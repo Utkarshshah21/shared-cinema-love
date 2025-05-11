@@ -1,8 +1,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { ZegoCloudService, ZegoUser } from '@/utils/zegocloud';
 import { useToast } from '@/components/ui/use-toast';
+import { ZegoCloudService } from '@/utils/zegocloud';
 
 // Configuration type for ZegoCloud
 export interface ZegoCloudConfig {

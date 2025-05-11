@@ -1,16 +1,6 @@
 
 // Types for WebRTC functionality
 
-// SignalingData is needed for useSignalingHandler
-export interface SignalingData {
-  type: string;
-  sender: string;
-  sdp?: string;
-  candidate?: RTCIceCandidate;
-  metadata?: any;
-  timestamp?: number;
-}
-
 export interface RemoteParticipant {
   userId: string;
   displayName: string;
@@ -53,24 +43,4 @@ export interface UseWebRTCReturn {
     localStreamTracks?: string;
     remoteStreamTracks?: string;
   };
-}
-
-export interface WebRTCState {
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
-  isCameraOn: boolean;
-  isMicOn: boolean;
-  isScreenSharing: boolean;
-  isConnected: boolean;
-  hasRemoteUser: boolean;
-  remoteParticipant: RemoteParticipant | null;
-  remoteParticipants: RemoteParticipant[];
-  connectionState: string;
-}
-
-export interface WebRTCHookDependencies {
-  toast: any;
-  roomId: string;
-  userId: string;
-  userDisplayName: string;
 }

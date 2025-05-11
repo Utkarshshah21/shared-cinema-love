@@ -299,6 +299,13 @@ export class ZegoCloudService {
     this.onRoomStateChangeCallback = callback;
   }
 
+  // Function to update display name
+  public updateDisplayName(displayName: string): void {
+    if (!this.user) return;
+    this.user.userName = displayName;
+    console.log(`Updated display name to: ${displayName}`);
+  }
+
   // Cleanup and destroy ZegoCloud engine
   public destroy(): void {
     if (this.isInRoom) {

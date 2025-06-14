@@ -1,6 +1,5 @@
 
 // Types for WebRTC functionality
-import { StateUpdater } from "preact/hooks";
 
 export interface RemoteParticipant {
   userId: string;   // Unique identifier for this participant

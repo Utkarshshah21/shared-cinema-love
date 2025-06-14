@@ -2,7 +2,7 @@
 import { useZegoCloud } from './useZegoCloud';
 import type { RemoteParticipant } from './webrtc/types';
 import { useState, useEffect, useCallback } from 'react';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 
 // Re-export types
 export type { RemoteParticipant };
@@ -55,7 +55,7 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
     ? Array.from(remoteStreams.values())[0] 
     : null;
 
-  // Convert remoteStreams Map to an array of RemoteParticipant objects with better handling
+  // Convert remoteStreams Map to an array of RemoteParticipant objects with all required properties
   const remoteParticipants: RemoteParticipant[] = Array.from(remoteStreams.entries()).map(
     ([userId, stream]) => {
       // Check for valid stream with tracks
@@ -64,14 +64,14 @@ export function useWebRTC(roomId: string, displayName: string = "User") {
       
       return {
         userId,
-        id: userId, // For backward compatibility
+        id: userId, // Required property for backward compatibility
         displayName: `User_${userId.slice(0, 4)}`,
         isCameraOn: hasVideoTracks && stream.getVideoTracks()[0].enabled,
         isMicOn: hasAudioTracks && stream.getAudioTracks()[0].enabled,
         isScreenSharing: false, // We don't track this separately in ZegoCloud implementation
         connectionState: 'connected',
         joinedAt: Date.now(),
-        stream
+        stream // Required property - the actual MediaStream
       };
     }
   );
